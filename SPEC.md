@@ -58,7 +58,10 @@ app/
 │                         monta StaticFiles en /front, incluye el router de login
 ├── api/
 │   ├── __init__.py
-│   └── login.py       → APIRouter con prefijo /auth; define POST /auth/login
+│   ├── deps.py        → require_user: dependencia que exige sesión válida (401 si no)
+│   ├── login.py       → APIRouter con prefijo /auth; define POST /auth/login
+│   └── parameters.py  → GET /parameters (protegida): formulario HTML con los
+│                         inputs Nodos totales, C y Threshold
 ├── core/
 │   ├── __init__.py
 │   └── config.py      → Settings (pydantic-settings): AUTH_USERNAME,

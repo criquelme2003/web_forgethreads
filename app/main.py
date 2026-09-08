@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.api import login
+from app.api import login, parameters
 from app.core.config import get_settings
 
 app = FastAPI(title="Login mínimo")
@@ -16,4 +16,5 @@ app.add_middleware(
 )
 
 app.include_router(login.router)
+app.include_router(parameters.router)
 app.mount("/front", StaticFiles(directory="app/static", html=True), name="front")
