@@ -57,7 +57,7 @@ def test_front_login_served(client: TestClient) -> None:
 
 
 def test_parameters_requires_auth(client: TestClient) -> None:
-    res = client.get("/parameters")
+    res = client.get("/front/parameters")
     assert res.status_code == 401
 
 
@@ -68,7 +68,7 @@ def test_parameters_served_after_login(client: TestClient) -> None:
     )
     assert login_res.status_code == 200
 
-    res = client.get("/parameters")
+    res = client.get("/front/parameters")
     assert res.status_code == 200
     assert "text/html" in res.headers["content-type"]
     body = res.text
