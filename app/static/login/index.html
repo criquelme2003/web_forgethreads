@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login</title>
+</head>
+<body>
+  <h1>Iniciar sesión</h1>
+  <form id="login-form">
+    <label>Usuario <input type="text" name="username" required /></label><br />
+    <label>Contraseña <input type="password" name="password" required /></label><br />
+    <button type="submit">Entrar</button>
+  </form>
+  <p id="message" role="status"></p>
+
+  <script>
+    const form = document.getElementById("login-form");
+    const message = document.getElementById("message");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const res = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: data.get("username"),
+          password: data.get("password"),
+        }),
+      });
+      message.textContent = res.ok
+        ? "Sesión iniciada correctamente."
+        : "Credenciales inválidas.";
+    });
+  </script>
+</body>
+</html>
