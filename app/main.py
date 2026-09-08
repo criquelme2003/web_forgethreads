@@ -17,4 +17,5 @@ app.add_middleware(
 
 app.include_router(login.router)
 app.include_router(parameters.router)
+
 app.mount("/front", StaticFiles(directory="app/static", html=True), name="front")
