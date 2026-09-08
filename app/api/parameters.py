@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from app.api.deps import require_user
 
-router = APIRouter(tags=["parameters"])
+router = APIRouter(tags=["parameters"],prefix="/front")
 
 _FORM_HTML = """<!DOCTYPE html>
 <html lang="es">
