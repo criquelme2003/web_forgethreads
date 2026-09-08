@@ -1,14 +1,32 @@
 name: Login Test
 run-name: ${{ github.actor }} is testing login procedure 🚀
-on: [push]
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+
 jobs:
-  Explore-GitHub-Actions:
+  pytest:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
-      - name: Install dependencies and run pytest
-        run: uv run pytest
-      
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run pytest
+        env:
+          AUTH_USERNAME: ci-admin
+          AUTH_PASSWORD: ci-password
+          SESSION_SECRET_KEY: ci-session-secret-key-0123456789
+        run: uv run pytest -q
