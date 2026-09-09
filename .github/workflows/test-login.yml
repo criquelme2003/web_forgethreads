@@ -24,9 +24,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Run pytest
+      - name: Run login pytest
         env:
           AUTH_USERNAME: ci-admin
           AUTH_PASSWORD: ci-password
           SESSION_SECRET_KEY: ci-session-secret-key-0123456789
-        run: uv run pytest -q
+        run: uv run pytest tests/test_login.py
