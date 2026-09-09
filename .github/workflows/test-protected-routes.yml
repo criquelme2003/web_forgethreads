@@ -1,5 +1,5 @@
-name: Login Test
-run-name: ${{ github.actor }} is testing login procedure 🚀
+name: Protected endpoints test
+run-name: ${{ github.actor }} is testing protected endpoints🚀
 on:
   push:
     branches: [main, "feat/**"]
