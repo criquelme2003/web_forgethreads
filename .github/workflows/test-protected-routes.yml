@@ -26,4 +26,4 @@ jobs:
           AUTH_USERNAME: ci-admin
           AUTH_PASSWORD: ci-password
           SESSION_SECRET_KEY: ci-session-secret-key-0123456789
-        run: uv run pytest tests/test_login.py
+        run: uv run pytest tests/test_protected_routes.py
