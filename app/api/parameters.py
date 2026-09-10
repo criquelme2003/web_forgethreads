@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends,Request
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import require_user
@@ -35,4 +35,5 @@ _FORM_HTML = """<!DOCTYPE html>
 
 @router.get("/parameters", response_class=HTMLResponse)
 def parameters_form(user: Annotated[str, Depends(require_user)]) -> str:
+
     return _FORM_HTML
