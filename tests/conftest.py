@@ -22,6 +22,9 @@ def _override_settings() -> Settings:
         auth_username=TEST_USERNAME,
         auth_password=TEST_PASSWORD,
         session_secret_key="test-secret-key-0123456789",
+        cuda3_password="1234",
+        cuda3_username="test_user",
+        cuda3_ip="192.192.192"
     )
 
 
