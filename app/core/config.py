@@ -8,8 +8,7 @@ class Settings(BaseSettings):
     auth_username: str
     auth_password: str
     session_secret_key: str
-    # --- Cluster nodes (homogéneos, conexión directa) ---
-    # Se mantienen cuda3_* por compatibilidad y se añaden cuda1/cuda2
+    # --- Cluster homogéneo 3 nodos (conexión directa) ---
     cuda1_ip: str | None = None
     cuda1_username: str | None = None
     cuda1_password: str | None = None
@@ -26,7 +25,7 @@ class Settings(BaseSettings):
     ssh_keepalive_interval: int = 30
 
     def get_cluster_nodes(self) -> list["NodeConfig"]:
-        """Retorna solo nodos configurados (ip != None)."""
+        """Retorna solo nodos configurados (ip + credenciales)."""
         from app.ssh.models import NodeConfig
 
         nodes: list[NodeConfig] = []
@@ -39,13 +38,15 @@ class Settings(BaseSettings):
             start=1,
         ):
             if ip:
-                # fallback: si user/pwd no seteados, usar los de cuda3 si existen
+                if not user or not pwd:
+                    # Sin credenciales explícitas el nodo no se puede usar (no hay fallback legacy)
+                    continue
                 nodes.append(
                     NodeConfig(
                         name=f"cuda{idx}",
                         host=ip,
-                        username=user or self.cuda3_username or "",
-                        password=pwd or self.cuda3_password or "",
+                        username=user,
+                        password=pwd,
                     )
                 )
         return nodes
