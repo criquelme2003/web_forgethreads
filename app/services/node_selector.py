@@ -136,13 +136,28 @@ class NodeSelector:
                 self._cache[name] = (now, res)
         return statuses
 
-    async def select_best(self, require_gpu: bool = False, force_refresh: bool = False) -> NodeStatus:
+    async def select_best(self, require_gpu: bool = False, force_refresh: bool = False, prefer_idle_gpu: bool = False, gpu_idle_threshold: int = 5) -> NodeStatus:
         """
         Selecciona mejor nodo disponible.
         - Filtra no disponibles y sin GPU si require_gpu=True.
-        - Ordena por score descendente.
-        - Si empate, prioriza más GPUs libres, luego más CPU libre.
+        - Si prefer_idle_gpu=True: primero intenta nodos con GPU en idle (util < threshold).
+          Si hay al menos uno, elige el mejor entre ellos por score; si no, fallback a scoring normal.
+        - Ordena por score descendente. Si empate, prioriza más GPUs libres, luego más CPU libre.
         """
+        # Fast-path sencillo: si pide preferencia idle, delega
+        if prefer_idle_gpu:
+            try:
+                idle_best = await self.select_idle_gpu_node(
+                    require_gpu=require_gpu,
+                    gpu_idle_threshold=gpu_idle_threshold,
+                    force_refresh=force_refresh,
+                )
+                if idle_best is not None:
+                    return idle_best
+                logger.info("No idle GPU found (threshold=%d), fallback to score", gpu_idle_threshold)
+            except Exception as e:
+                logger.warning("prefer_idle_gpu failed, fallback to score: %s", e)
+
         statuses = await self.get_all_status(force_refresh=force_refresh)
         candidates = [s for s in statuses if s.is_available]
         if require_gpu:
@@ -166,6 +181,86 @@ class NodeSelector:
         logger.info("Selected node %s score=%.1f gpu_free=%d cpu_free=%.2f state=%s", best.name, self.score(best), best.gpus_free, best.cpu_free_ratio, best.state.value)
         return best
 
+    # --- GPU idle: forma sencilla de priorizar nodo con GPU en idle ---
+    async def _check_idle_for_status(self, status: NodeStatus, threshold: int = 5) -> NodeStatus:
+        """Consulta nvidia-smi en el nodo y rellena has_idle_gpu/gpu_utils. Retorna status enrichado."""
+        if not status.reachable:
+            status.has_idle_gpu = False
+            status.gpu_utils = []
+            return status
+        conn = await self.pool.try_get_connection(status.name, timeout=5.0)
+        if conn is None:
+            status.has_idle_gpu = False
+            status.gpu_utils = []
+            return status
+        try:
+            await self.slurm_repo.enrich_status_with_idle(conn, status, threshold=threshold)
+        except Exception as e:
+            logger.debug("idle check %s failed: %s", status.name, e)
+            status.has_idle_gpu = False
+            status.gpu_utils = []
+        return status
+
+    async def find_idle_gpu_nodes(
+        self, require_gpu: bool = False, gpu_idle_threshold: int = 5, force_refresh: bool = False
+    ) -> list[NodeStatus]:
+        """
+        Retorna lista de nodos disponibles que tienen al menos una GPU en idle (util < threshold).
+        - Consulta nvidia-smi en paralelo solo sobre candidatos is_available.
+        - Vacía si ninguno tiene GPU idle.
+        Uso sencillo:
+            idle_nodes = await selector.find_idle_gpu_nodes()
+            if idle_nodes: best = max(idle_nodes, key=selector.score)
+        """
+        statuses = await self.get_all_status(force_refresh=force_refresh)
+        candidates = [s for s in statuses if s.is_available]
+        if require_gpu:
+            candidates = [s for s in candidates if s.gpus_total > 0 or s.gpus_total == 0]  # si gpus_total==0 pero nvidia-smi puede revelar GPUs, no filtrar agresivo
+            # filtrar luego por has_idle_gpu
+        if not candidates:
+            return []
+        # check idle en paralelo
+        enriched = await asyncio.gather(*[self._check_idle_for_status(s, threshold=gpu_idle_threshold) for s in candidates])
+        idle_nodes = [s for s in enriched if s.has_idle_gpu]
+        # si filtrado require_gpu estricto, asegurar que realmente tiene GPU
+        if require_gpu:
+            idle_nodes = [s for s in idle_nodes if (s.gpus_total > 0 or (s.gpu_utils and len(s.gpu_utils) > 0))]
+        # ordenar por score para que el caller tenga ranking
+        idle_nodes.sort(key=lambda s: (self.score(s), s.gpus_free, s.cpu_free_ratio, -s.pending_jobs), reverse=True)
+        logger.info("Idle GPU nodes (threshold=%d): %s", gpu_idle_threshold, [(n.name, n.gpu_utils, self.score(n)) for n in idle_nodes])
+        return idle_nodes
+
+    async def select_idle_gpu_node(
+        self, require_gpu: bool = False, gpu_idle_threshold: int = 5, force_refresh: bool = False
+    ) -> NodeStatus | None:
+        """
+        Forma sencilla: selecciona un nodo con GPU en idle; si no hay ninguno retorna None.
+        Caller debe hacer fallback a select_best():
+            node = await selector.select_idle_gpu_node() or await selector.select_best()
+        O usar select_best(prefer_idle_gpu=True) que hace esto automáticamente.
+        """
+        idle_nodes = await self.find_idle_gpu_nodes(
+            require_gpu=require_gpu, gpu_idle_threshold=gpu_idle_threshold, force_refresh=force_refresh
+        )
+        if not idle_nodes:
+            return None
+        return idle_nodes[0]
+
+    async def select_best_with_idle_priority(
+        self, require_gpu: bool = False, gpu_idle_threshold: int = 5, force_refresh: bool = False
+    ) -> NodeStatus:
+        """
+        Azúcar sintáctico explícito: intenta idle primero, si no hay fallback a score.
+        Equivalente a select_best(prefer_idle_gpu=True).
+        """
+        idle = await self.select_idle_gpu_node(
+            require_gpu=require_gpu, gpu_idle_threshold=gpu_idle_threshold, force_refresh=force_refresh
+        )
+        if idle is not None:
+            logger.info("Selected idle GPU node %s utils=%s", idle.name, idle.gpu_utils)
+            return idle
+        return await self.select_best(require_gpu=require_gpu, force_refresh=force_refresh, prefer_idle_gpu=False)
+
     async def get_ordered_nodes(self, require_gpu: bool = False) -> list[NodeStatus]:
         """Retorna todos los candidatos ordenados por score (para failover)."""
         statuses = await self.get_all_status()
@@ -174,13 +269,41 @@ class NodeSelector:
             candidates = [s for s in candidates if s.gpus_total > 0]
         return sorted(candidates, key=lambda s: self.score(s), reverse=True)
 
-    async def run_on_best_node(self, command: str, require_gpu: bool = False, timeout: float = 15.0):
+    async def get_ordered_nodes_with_idle_priority(
+        self, require_gpu: bool = False, gpu_idle_threshold: int = 5, force_refresh: bool = False
+    ) -> list[NodeStatus]:
+        """
+        Retorna candidatos ordenados con idle primero:
+        - Los que tienen GPU idle al frente (ordenados por score).
+        - Resto detrás (ordenados por score).
+        Útil para run_on_best_node con preferencia idle pero con failover completo.
+        """
+        idle_nodes = await self.find_idle_gpu_nodes(
+            require_gpu=require_gpu, gpu_idle_threshold=gpu_idle_threshold, force_refresh=force_refresh
+        )
+        if idle_nodes:
+            # ordered normal sin duplicados
+            normal_ordered = await self.get_ordered_nodes(require_gpu=require_gpu)
+            idle_names = {n.name for n in idle_nodes}
+            rest = [n for n in normal_ordered if n.name not in idle_names]
+            return idle_nodes + rest
+        return await self.get_ordered_nodes(require_gpu=require_gpu)
+
+    async def run_on_best_node(
+        self, command: str, require_gpu: bool = False, timeout: float = 15.0, prefer_idle_gpu: bool = False, gpu_idle_threshold: int = 5
+    ):
         """
         Ejecuta comando en el mejor nodo con failover.
+        - Si prefer_idle_gpu=True: intenta idle primero (util < threshold), si no hay idle usa score.
         Intenta en orden de ranking hasta que uno responda.
         Retorna (NodeStatus, result).
         """
-        ordered = await self.get_ordered_nodes(require_gpu=require_gpu)
+        if prefer_idle_gpu:
+            ordered = await self.get_ordered_nodes_with_idle_priority(
+                require_gpu=require_gpu, gpu_idle_threshold=gpu_idle_threshold
+            )
+        else:
+            ordered = await self.get_ordered_nodes(require_gpu=require_gpu)
         if not ordered:
             raise NoAvailableNodeError("No hay nodos para ejecutar comando")
         last_err = None

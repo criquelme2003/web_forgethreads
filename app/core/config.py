@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     slurm_poll_interval: int = 15  # TTL cache selector (s)
     ssh_connect_timeout: int = 10
     ssh_keepalive_interval: int = 30
+    # GPU idle detection
+    gpu_idle_threshold: int = 5  # % util por debajo del cual GPU se considera idle
 
     def get_cluster_nodes(self) -> list["NodeConfig"]:
         """Retorna solo nodos configurados (ip + credenciales)."""

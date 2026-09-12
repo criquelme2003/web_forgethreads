@@ -144,6 +144,37 @@ def parse_sinfo_line(line: str) -> tuple[NodeState, int, int, int]:
     return state, cpus_alloc, cpus_total, gpus_total
 
 
+def parse_gpu_utils(output: str) -> list[int]:
+    """
+    Parsea salida de `nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits`
+    Ej:
+        "0\n0\n45\n" -> [0, 0, 45]
+        " 5, 10 " -> manejo robusto.
+        "No devices found" / "command not found" / "" -> []
+    """
+    if not output or "command not found" in output.lower() or "no devices" in output.lower():
+        return []
+    utils: list[int] = []
+    # salida puede venir como lineas o csv
+    for token in re.split(r"[\n,\s]+", output.strip()):
+        if not token:
+            continue
+        # token puede ser "0" o "0%" -> limpiar %
+        token = token.strip().rstrip("%")
+        try:
+            utils.append(int(float(token)))
+        except ValueError:
+            continue
+    return utils
+
+
+def has_idle_gpu_from_utils(utils: list[int], threshold: int = 5) -> bool:
+    """True si algún GPU tiene utilización < threshold."""
+    if not utils:
+        return False
+    return any(u < threshold for u in utils)
+
+
 class SlurmRepository:
     """
     Consultas SLURM vía SSH. Diseñado para conexión directa:
@@ -159,6 +190,8 @@ class SlurmRepository:
     # Fallbacks sin SLURM
     GPU_FALLBACK_CMD = "nvidia-smi --query-gpu=count --format=csv,noheader 2>&1 || echo 0"
     GPU_USED_FALLBACK = "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader 2>&1 | wc -l"
+    # GPU idle check (sencillo): util < threshold => idle
+    GPU_IDLE_CMD = "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>&1"
 
     async def _run(self, conn: asyncssh.SSHClientConnection, cmd: str, timeout: float = 7.0) -> tuple[int, str, str]:
         try:
@@ -239,6 +272,50 @@ class SlurmRepository:
             except (ValueError, IndexError):
                 return 0
         return 0
+
+    # --- GPU idle sencillo ---
+    async def get_gpu_utils(self, conn: asyncssh.SSHClientConnection, timeout: float = 5.0) -> list[int]:
+        """Retorna lista de utilizaciones por GPU (ej [0, 20]). Vacía si no hay GPU o error."""
+        _, stdout, stderr = await self._run(conn, self.GPU_IDLE_CMD, timeout=timeout)
+        if stderr and "command not found" in stderr.lower():
+            return []
+        output = stdout or ""
+        return parse_gpu_utils(output)
+
+    async def has_idle_gpu(
+        self, conn: asyncssh.SSHClientConnection, threshold: int = 5, timeout: float = 5.0
+    ) -> tuple[bool, list[int]]:
+        """
+        Comprueba si el nodo tiene alguna GPU en idle.
+        Retorna (has_idle, utils_list).
+        - threshold: % util por debajo del cual se considera idle (default 5).
+        - Si no hay GPUs o error, retorna (False, []).
+        """
+        utils = await self.get_gpu_utils(conn, timeout=timeout)
+        if not utils:
+            return False, utils
+        return has_idle_gpu_from_utils(utils, threshold=threshold), utils
+
+    async def enrich_status_with_idle(
+        self, conn: asyncssh.SSHClientConnection, status: NodeStatus, threshold: int = 5
+    ) -> NodeStatus:
+        """Rellena status.has_idle_gpu y status.gpu_utils consultando nvidia-smi. No falla."""
+        if not status.reachable or status.gpus_total == 0:
+            # si no hay info de gpus_total, aun intentamos consultar (fallback puede haber subestimado)
+            pass
+        try:
+            has_idle, utils = await self.has_idle_gpu(conn, threshold=threshold)
+            status.has_idle_gpu = has_idle
+            status.gpu_utils = utils
+            # Si había gpus_total=0 pero nvidia-smi devolvió utils, corrige
+            if status.gpus_total == 0 and utils:
+                status.gpus_total = len(utils)
+                status.gpus_alloc = 0 if has_idle else len(utils)
+        except Exception as e:
+            logger.debug("enrich_status_with_idle %s failed: %s", status.name, e)
+            status.has_idle_gpu = False
+            status.gpu_utils = []
+        return status
 
     async def _fallback_status(self, conn: asyncssh.SSHClientConnection, node: NodeConfig) -> NodeStatus:
         # GPUs totales via nvidia-smi -L | wc -l o query

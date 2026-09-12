@@ -54,6 +54,9 @@ class NodeStatus:
     pending_jobs: int = 0
     reachable: bool = True
     raw_scontrol: str | None = None
+    # --- GPU idle (opcional, se rellena bajo demanda) ---
+    has_idle_gpu: bool | None = None  # None = no consultado, True/False = resultado
+    gpu_utils: list[int] | None = None  # util % por GPU si se consultó (ej [0, 45])
 
     @property
     def gpus_free(self) -> int:
@@ -72,3 +75,8 @@ class NodeStatus:
     @property
     def is_available(self) -> bool:
         return self.reachable and self.state not in (NodeState.DRAIN, NodeState.DOWN, NodeState.UNKNOWN)
+
+    @property
+    def is_gpu_idle(self) -> bool | None:
+        """Atajo para has_idle_gpu (None si no se ha consultado)."""
+        return self.has_idle_gpu
