@@ -12,7 +12,11 @@ TEST_PASSWORD = "testpass"
 PROTECTED_ROUTES = [
     (
         "/front/parameters",
-        ('name="nodos_totales"', 'name="c"', 'name="threshold"'),
+        ('name="numero_nodos"', 'name="threshold"', 'name="conectividad_promedio"', 'name="seed"'),
+    ),
+    (
+        "/front/execute_maxmin",
+        ('name="numero_nodos"', 'name="threshold"', 'name="conectividad_promedio"', 'name="seed"'),
     ),
 ]
 
