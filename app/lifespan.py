@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 async def global_lifespan(app: FastAPI):
     settings = get_settings()
     pool = get_pool_from_settings()
+    print(f"[DEBUG ssh_pool] pool creado en lifespan id={id(pool)}")
     selector = NodeSelector(pool=pool, slurm_repo=SlurmRepository(), cache_ttl=settings.slurm_poll_interval)
 
     # Warmup best-effort: no bloquea startup si un nodo está caído
@@ -29,8 +30,12 @@ async def global_lifespan(app: FastAPI):
     else:
         print("No SSH nodes configured (revisa .env CUDA*_IP)")
         logger.warning("No SSH nodes configured")
-
-    yield {"ssh_pool": pool, "node_selector": selector, "slurm_repo": SlurmRepository()}
+    
+    yield {
+        "ssh_pool": pool,
+        "node_selector": selector,
+        "slurm_repo": SlurmRepository(),
+    }
 
     print("Closing SSH pool")
     try:

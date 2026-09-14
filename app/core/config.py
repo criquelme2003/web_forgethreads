@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # GPU idle detection
     gpu_idle_threshold: int = 5  # % util por debajo del cual GPU se considera idle
 
+    # --- Flujo de jobs SLURM (new_job + notifier) ---
+    public_callback_base_url: str  # URL pública de este backend, alcanzable desde el cluster
+    scripts_wf_dir: str = "scripts_wf"  # ruta remota (relativa a $HOME del usuario SSH) del repo scripts_wf
+    session_max_age_seconds: int = 14 * 24 * 60 * 60  # debe coincidir con SessionMiddleware(max_age=...)
+
     def get_cluster_nodes(self) -> list["NodeConfig"]:
         """Retorna solo nodos configurados (ip + credenciales)."""
         from app.ssh.models import NodeConfig
