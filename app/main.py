@@ -5,6 +5,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.api import execute_maxmin, login, parameters, gpu_status, results
 from app.core.config import get_settings
 from app.lifespan import global_lifespan
+import logging; logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("ssh_pool").setLevel(logging.DEBUG)
 
 app = FastAPI(title="Login mínimo",lifespan=global_lifespan)
 
