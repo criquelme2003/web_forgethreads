@@ -8,9 +8,55 @@ class Settings(BaseSettings):
     auth_username: str
     auth_password: str
     session_secret_key: str
-    cuda3_ip:str
-    cuda3_username:str
-    cuda3_password:str
+    # --- Cluster homogéneo 3 nodos (conexión directa) ---
+    cuda1_ip: str | None = None
+    cuda1_username: str | None = None
+    cuda1_password: str | None = None
+    cuda2_ip: str | None = None
+    cuda2_username: str | None = None
+    cuda2_password: str | None = None
+    cuda3_ip: str | None = None
+    cuda3_username: str | None = None
+    cuda3_password: str | None = None
+
+    # Tuning SLURM / SSH pool
+    slurm_poll_interval: int = 15  # TTL cache selector (s)
+    ssh_connect_timeout: int = 10
+    ssh_keepalive_interval: int = 30
+    # GPU idle detection
+    gpu_idle_threshold: int = 5  # % util por debajo del cual GPU se considera idle
+
+    # --- Flujo de jobs SLURM (new_job + notifier) ---
+    public_callback_base_url: str  # URL pública de este backend, alcanzable desde el cluster
+    scripts_wf_dir: str = "scripts_wf"  # ruta remota (relativa a $HOME del usuario SSH) del repo scripts_wf
+    session_max_age_seconds: int = 14 * 24 * 60 * 60  # debe coincidir con SessionMiddleware(max_age=...)
+
+    def get_cluster_nodes(self) -> list["NodeConfig"]:
+        """Retorna solo nodos configurados (ip + credenciales)."""
+        from app.ssh.models import NodeConfig
+
+        nodes: list[NodeConfig] = []
+        for idx, (ip, user, pwd) in enumerate(
+            [
+                (self.cuda1_ip, self.cuda1_username, self.cuda1_password),
+                (self.cuda2_ip, self.cuda2_username, self.cuda2_password),
+                (self.cuda3_ip, self.cuda3_username, self.cuda3_password),
+            ],
+            start=1,
+        ):
+            if ip:
+                if not user or not pwd:
+                    # Sin credenciales explícitas el nodo no se puede usar (no hay fallback legacy)
+                    continue
+                nodes.append(
+                    NodeConfig(
+                        name=f"cuda{idx}",
+                        host=ip,
+                        username=user,
+                        password=pwd,
+                    )
+                )
+        return nodes
     
 # ENABLE CACHE PERSISTENCE AND SINGLETON PATTERN
 @lru_cache
