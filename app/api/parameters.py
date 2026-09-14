@@ -93,8 +93,30 @@ _FORM_HTML = """<!DOCTYPE html>
         </div>
       </form>
       <div class="foot">
-        <span>POST <span class="mono">/app/execute_maxmin</span> · requiere sesión</span>
+        <span>POST <span class="mono">/app/execute_maxmin</span> · requiere sesión · ejecuta <span class="mono">pwd</span> en nodo</span>
         <span class="mono">v1</span>
+      </div>
+    </div>
+
+    <div id="debug" hidden style="margin-top:20px; border:1px solid var(--border); border-radius:var(--radius); background:#fff; overflow:hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--border); background:#f9fafb">
+        <strong style="font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:#374151">Respuesta del servidor — JSON completo</strong>
+        <button type="button" id="copy-btn" style="font-size:11px; padding:5px 9px; border:1px solid #d1d5db; border-radius:6px; background:#fff; cursor:pointer; color:#374151">Copiar</button>
+      </div>
+      <div style="padding:14px 16px; display:grid; gap:14px">
+        <div>
+          <div style="font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#6b7280; margin-bottom:6px">REQUEST ENVIADO</div>
+          <pre id="json-request" class="mono" style="background:#f9fafb; border:1px solid var(--border); padding:10px; border-radius:6px; overflow:auto; font-size:12px; margin:0; white-space:pre-wrap; word-break:break-all"></pre>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#6b7280; margin-bottom:6px">RESPONSE (message, job_id, notifier, token, node, pwd)</div>
+          <pre id="json-response" class="mono" style="background:#f9fafb; border:1px solid var(--border); padding:10px; border-radius:6px; overflow:auto; font-size:12px; margin:0; white-space:pre-wrap; word-break:break-all"></pre>
+        </div>
+        <div id="pwd-block" hidden>
+          <div style="font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#6b7280; margin-bottom:6px">PWD EN NODO SELECCIONADO</div>
+          <pre id="json-pwd" class="mono" style="background:#111827; color:#e5e7eb; border:1px solid #1f2937; padding:10px; border-radius:6px; overflow:auto; font-size:12px; margin:0; white-space:pre-wrap"></pre>
+        </div>
+        <div style="font-size:11px; color:var(--muted)">El <span class="mono">pwd</span> se ejecuta en el nodo elegido por el selector (idle por defecto `app/services/node_selector.py:139`). El notifier usará el mismo `job_token` para `POST /app/jobs/{job_id}/result`.</div>
       </div>
     </div>
   </main>
@@ -102,7 +124,16 @@ _FORM_HTML = """<!DOCTYPE html>
     const form = document.getElementById('parameters-form');
     const statusEl = document.getElementById('form-status');
     const btn = document.getElementById('submit-btn');
+    const debug = document.getElementById('debug');
+    const jr = document.getElementById('json-request');
+    const js = document.getElementById('json-response');
+    const pwdBlock = document.getElementById('pwd-block');
+    const jp = document.getElementById('json-pwd');
+    const copyBtn = document.getElementById('copy-btn');
     function setStatus(msg, kind){ statusEl.textContent = msg; statusEl.className = 'status ' + (kind||'muted'); }
+    copyBtn.addEventListener('click', async ()=>{
+      try{ await navigator.clipboard.writeText(js.textContent); copyBtn.textContent='Copiado'; setTimeout(()=>copyBtn.textContent='Copiar',1200);}catch{}
+    });
     form.addEventListener('submit', async (e)=>{
       e.preventDefault();
       setStatus('', 'muted');
@@ -113,10 +144,11 @@ _FORM_HTML = """<!DOCTYPE html>
         conectividad_promedio: parseInt(fd.get('conectividad_promedio'),10),
         seed: parseInt(fd.get('seed'),10)
       };
-      // validación cliente mínima
       if(!payload.numero_nodos || payload.numero_nodos<=0){ setStatus('Revisa número de nodos.', 'err'); return; }
       if(!Number.isFinite(payload.threshold)){ setStatus('Revisa threshold.', 'err'); return; }
       btn.disabled = true; btn.textContent = 'Enviando…';
+      jr.textContent = JSON.stringify(payload, null, 2);
+      js.textContent = ''; jp.textContent=''; debug.hidden=false; pwdBlock.hidden=true;
       try{
         const res = await fetch('/app/execute_maxmin', {
           method:'POST',
@@ -124,9 +156,15 @@ _FORM_HTML = """<!DOCTYPE html>
           body: JSON.stringify(payload)
         });
         const body = await res.json().catch(()=>({}));
+        js.textContent = JSON.stringify(body, null, 2);
+        if(body.pwd){
+          pwdBlock.hidden=false;
+          jp.textContent = JSON.stringify(body.pwd, null, 2) + (body.pwd.output ? "\\n\\n$ pwd\\n" + body.pwd.output : "");
+        }
         if(res.ok){
           setStatus(body.message || 'Tarea ingresada correctamente', 'ok');
-          form.reset();
+          // no resetea para que veas los JSON; descomenta si quieres limpiar:
+          // form.reset();
         } else if(res.status===401){
           setStatus('Sesión expirada. Ve a /front/login', 'err');
         } else {
@@ -134,6 +172,7 @@ _FORM_HTML = """<!DOCTYPE html>
           setStatus(msg, 'err');
         }
       } catch(err){
+        js.textContent = JSON.stringify({error: String(err)}, null, 2);
         setStatus('Error de red.', 'err');
       } finally {
         btn.disabled = false; btn.textContent = 'Encolar tarea';
