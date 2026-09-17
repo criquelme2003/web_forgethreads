@@ -3,13 +3,14 @@ import logging
 from fastapi import HTTPException, Request, status
 
 from app.core.config import get_settings
-from app.repositories.slurm import SlurmRepository
-from app.services.job_store import JobStore
-from app.services.job_store import job_store as _job_store_singleton
+from app.services.job_store import job_store
 from app.services.node_selector import NodeSelector
 from app.ssh.pool import SSHConnectionPool
 
 logger = logging.getLogger("ssh_pool")
+
+def get_job_store():
+  return job_store
 
 
 def require_user(request: Request) -> str:
@@ -64,11 +65,3 @@ def get_node_selector(request: Request) -> NodeSelector:
     sel = get_selector_singleton()
     logger.debug("SINGLETON selector id=%s pool_id=%s", id(sel), id(sel.pool))
     return sel
-
-
-def get_slurm_repo(request: Request) -> SlurmRepository:
-    if request.app.dependency_overrides.get(get_settings) is not None:
-        return SlurmRepository()
-    from app.ssh.connection import get_slurm_singleton
-
-    return get_slurm_singleton()

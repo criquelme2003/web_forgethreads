@@ -5,9 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_job_store, require_user
-from app.core.config import Settings, get_settings
 from app.services.job_store import JobNotFoundError, JobStore
-from app.services.session_token import TokenInvalidError, verify_auth_token
 
 router = APIRouter(tags=["jobs"])
 
@@ -45,18 +43,10 @@ def _extract_bearer_token(request: Request) -> str:
 async def job_callback(
     payload: JobCallbackPayload,
     request: Request,
-    settings: Annotated[Settings, Depends(get_settings)],
     store: Annotated[JobStore, Depends(get_job_store)],
 ) -> dict:
     token = _extract_bearer_token(request)
-    try:
-        verify_auth_token(
-            token,
-            settings.auth_password,
-            settings.session_secret_key,
-            max_age=settings.session_max_age_seconds,
-        )
-    except TokenInvalidError:
+    if not await store.verify_token(payload.job_id, token):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
 
     try:

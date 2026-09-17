@@ -24,7 +24,7 @@ def test_protected_route_served_after_login(
     client: TestClient, path: str, markers: tuple[str, ...]
 ) -> None:
     _login(client)
-
+    
     res = client.get(path)
     assert res.status_code == 200
     assert "text/html" in res.headers["content-type"]

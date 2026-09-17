@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8" /><title>Cluster Status</title></head>
+<body>
+  <h1>Cluster Status (GPU priorizada)</h1>
+  {% if check_idle %}
+    <p>GPU idle threshold: {{ gpu_idle_threshold }}% (util &lt; threshold = idle)</p>
+  {% else %}
+    <p><a href="?check_idle=true">Ver con check GPU idle (nvidia-smi)</a></p>
+  {% endif %}
+  <table border="1" cellpadding="5" cellspacing="0">
+    <tr>
+      <th>Nodo</th><th>Host</th><th>Estado SLURM</th><th>GPUs libres</th><th>CPUs libres</th>
+      <th>Jobs pendientes</th><th>Score</th><th>Reachable</th>
+      {% if check_idle %}<th>GPU idle?</th><th>GPU utils</th>{% endif %}
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.name }}</td><td>{{ row.host }}</td><td>{{ row.state }}</td>
+      <td>{{ row.gpus_free }}/{{ row.gpus_total }}</td><td>{{ row.cpus_free }}/{{ row.cpus_total }}</td>
+      <td>{{ row.pending_jobs }}</td><td>{{ "%.1f"|format(row.score) }}</td><td>{{ "sí" if row.reachable else "no" }}</td>
+      {% if check_idle %}<td>{{ row.idle_str }}</td><td>{{ row.utils_str }}</td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>
