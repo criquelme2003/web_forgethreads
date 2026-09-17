@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     ssh_keepalive_interval: int = 30
     # GPU idle detection
     gpu_idle_threshold: int = 5  # % util por debajo del cual GPU se considera idle
+    # Jobs notifier
+    callback_base_url: str | None = None  # ej http://host:8000, si None se deduce de request.host
 
     # --- Flujo de jobs SLURM (new_job + notifier) ---
     public_callback_base_url: str  # URL pública de este backend, alcanzable desde el cluster

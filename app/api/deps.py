@@ -2,13 +2,14 @@ import logging
 
 from fastapi import HTTPException, Request, status
 
+from app.core.config import get_settings
 from app.repositories.slurm import SlurmRepository
 from app.services.job_store import JobStore
 from app.services.job_store import job_store as _job_store_singleton
 from app.services.node_selector import NodeSelector
 from app.ssh.pool import SSHConnectionPool
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ssh_pool")
 
 
 def require_user(request: Request) -> str:
@@ -24,8 +25,6 @@ def require_user(request: Request) -> str:
 
 def _get_effective_settings(request: Request):
     """Respeta dependency_overrides para tests."""
-    from app.core.config import get_settings
-
     override = request.app.dependency_overrides.get(get_settings)
     if override is not None:
         return override()
@@ -33,12 +32,8 @@ def _get_effective_settings(request: Request):
 
 
 def get_ssh_pool(request: Request) -> SSHConnectionPool:
-    from_app_state = getattr(request.app.state, "ssh_pool", None)
-    from_request_state = request.state.__dict__.get("ssh_pool")
-    pool = from_app_state or from_request_state
-    # lifespan con yield dict expone via app.state + request.state
-    if pool is None:
-        # fallback para tests sin lifespan (TestClient sin warmup)
+    # Si hay override de settings (tests), crea pool aislado con esos settings para no contaminar singleton
+    if request.app.dependency_overrides.get(get_settings) is not None:
         from app.ssh.pool import SSHConnectionPool
 
         settings = _get_effective_settings(request)
@@ -47,34 +42,33 @@ def get_ssh_pool(request: Request) -> SSHConnectionPool:
             connect_timeout=settings.ssh_connect_timeout,
             keepalive_interval=settings.ssh_keepalive_interval,
         )
-        print(
-            f"[DEBUG ssh_pool] FALLBACK: pool NUEVO id={id(pool)} "
-            f"(app.state={from_app_state}, request.state={from_request_state})"
-        )
-    else:
-        print(
-            f"[DEBUG ssh_pool] usando pool id={id(pool)} "
-            f"(origen={'app.state' if from_app_state is not None else 'request.state'})"
-        )
+        logger.debug("FALLBACK TEST pool NUEVO id=%s", id(pool))
+        return pool
+    # Producción: singleton al estilo job_service._JOBS, evita abrir SSH por request
+    from app.ssh.connection import get_pool_singleton
+
+    pool = get_pool_singleton()
+    logger.debug("SINGLETON pool id=%s nodes=%s", id(pool), pool.node_names)
     return pool
 
 
 def get_node_selector(request: Request) -> NodeSelector:
-    selector = getattr(request.app.state, "node_selector", None) or request.state.__dict__.get("node_selector")
-    if selector is None:
+    if request.app.dependency_overrides.get(get_settings) is not None:
         settings = _get_effective_settings(request)
         pool = get_ssh_pool(request)
-        selector = NodeSelector(pool=pool, cache_ttl=settings.slurm_poll_interval)
-    return selector
+        sel = NodeSelector(pool=pool, cache_ttl=settings.slurm_poll_interval)
+        logger.debug("FALLBACK TEST selector NUEVO id=%s pool_id=%s", id(sel), id(pool))
+        return sel
+    from app.ssh.connection import get_selector_singleton
+
+    sel = get_selector_singleton()
+    logger.debug("SINGLETON selector id=%s pool_id=%s", id(sel), id(sel.pool))
+    return sel
 
 
 def get_slurm_repo(request: Request) -> SlurmRepository:
-    repo = getattr(request.app.state, "slurm_repo", None)
-    if repo is None:
+    if request.app.dependency_overrides.get(get_settings) is not None:
         return SlurmRepository()
-    return repo
+    from app.ssh.connection import get_slurm_singleton
 
-
-def get_job_store() -> JobStore:
-    """Singleton a nivel de módulo (ver app/services/job_store.py); no depende de request.app.state."""
-    return _job_store_singleton
+    return get_slurm_singleton()

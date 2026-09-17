@@ -136,7 +136,7 @@ class NodeSelector:
                 self._cache[name] = (now, res)
         return statuses
 
-    async def select_best(self, require_gpu: bool = False, force_refresh: bool = False, prefer_idle_gpu: bool = False, gpu_idle_threshold: int = 5) -> NodeStatus:
+    async def select_best(self, require_gpu: bool = False, force_refresh: bool = False, prefer_idle_gpu: bool = True, gpu_idle_threshold: int = 5) -> NodeStatus:
         """
         Selecciona mejor nodo disponible.
         - Filtra no disponibles y sin GPU si require_gpu=True.
@@ -290,7 +290,7 @@ class NodeSelector:
         return await self.get_ordered_nodes(require_gpu=require_gpu)
 
     async def run_on_best_node(
-        self, command: str, require_gpu: bool = False, timeout: float = 15.0, prefer_idle_gpu: bool = False, gpu_idle_threshold: int = 5
+        self, command: str, require_gpu: bool = False, timeout: float = 15.0, prefer_idle_gpu: bool = True, gpu_idle_threshold: int = 5
     ):
         """
         Ejecuta comando en el mejor nodo con failover.

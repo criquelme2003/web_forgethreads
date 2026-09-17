@@ -30,14 +30,13 @@ async def parameters_form(
     user: Annotated[str, Depends(require_user)],
     req: Request,
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
-    prefer_idle: bool = False,
+    prefer_idle: bool = True,
     gpu_idle_threshold: int | None = None,
 ) -> str:
     """
-    - Por defecto: selección por score (GPU priorizada).
-    - Si prefer_idle=true: primero busca nodo con GPU en idle (nvidia-smi util < threshold).
-      Si existe lo usa; si no, fallback automático a scoring normal.
-      Ej: /front/gpu_status?prefer_idle=true  o  ?prefer_idle=true&gpu_idle_threshold=10
+    - Por defecto: intenta GPU idle (nvidia-smi util < threshold) vía `enrich_status_with_idle` `app/repositories/slurm.py:299`.
+      Si hay nodo con GPU idle lo usa; si no, fallback automático a scoring normal `app/services/node_selector.py:51`.
+      Ej: /front/gpu_status  (idle por defecto)  o  ?prefer_idle=false para forzar solo score, o ?prefer_idle=true&gpu_idle_threshold=10
     """
     from fastapi.responses import HTMLResponse
 

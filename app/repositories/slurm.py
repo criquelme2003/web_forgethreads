@@ -206,6 +206,27 @@ class SlurmRepository:
             logger.warning("SLURM command error %s: %s", cmd, e)
             return 1, "", str(e)
 
+    async def _correct_gpu_total_if_zero(self, conn: asyncssh.SSHClientConnection, status: NodeStatus) -> NodeStatus:
+        """Si SLURM reportó 0 GPUs pero nvidia-smi ve GPUs, corrige gpus_total (y gpus_free). No falla."""
+        if status.gpus_total != 0:
+            return status
+        try:
+            _, gpu_out, _ = await self._run(conn, "nvidia-smi -L 2>&1 | grep -c \"GPU\" || echo 0", timeout=5.0)
+            try:
+                cnt = int(gpu_out.strip().split()[0])
+            except (ValueError, IndexError):
+                cnt = 0
+            if cnt > 0:
+                logger.info("Corrige gpus_total 0->%d para %s vía nvidia-smi -L", cnt, status.name)
+                status.gpus_total = cnt
+                # si no sabemos alloc, asumir 0 libres (coherente con fallback)
+                if status.gpus_alloc == 0:
+                    # si estado es ALLOC sin info, deja 0 libres; si IDLE/MIX deja todas libres
+                    pass
+        except Exception as e:
+            logger.debug("correct_gpu_total %s failed: %s", status.name, e)
+        return status
+
     async def get_node_status(self, conn: asyncssh.SSHClientConnection, node: NodeConfig) -> NodeStatus:
         # 1) Intentar scontrol (más rico)
         exit_code, stdout, stderr = await self._run(conn, self.SCONTROL_CMD.format(node=node.name))
@@ -214,6 +235,8 @@ class SlurmRepository:
                 status = parse_scontrol_output(stdout, node.name, node.host)
                 # enriquecer con pending jobs
                 status.pending_jobs = await self._get_pending_jobs(conn, node)
+                # Si SLURM dice 0 GPUs pero nvidia sí ve GPUs, corrige (caso cuda1 reportado 0/0)
+                status = await self._correct_gpu_total_if_zero(conn, status)
                 return status
             except Exception as e:
                 logger.warning("parse_scontrol failed for %s: %s", node.name, e)
@@ -238,6 +261,7 @@ class SlurmRepository:
                     reachable=True,
                     raw_scontrol=stdout2,
                 )
+                status = await self._correct_gpu_total_if_zero(conn, status)
                 return status
             except Exception as e:
                 logger.warning("parse_sinfo failed for %s: %s", node.name, e)
@@ -316,6 +340,50 @@ class SlurmRepository:
             status.has_idle_gpu = False
             status.gpu_utils = []
         return status
+
+    # --- Jobs MaxMin (SLURM sbatch + dependencia notifier) ---
+    async def submit_job(self, conn: asyncssh.SSHClientConnection, wrap_command: str, job_name: str = "maxmin", partition: str | None = None) -> str:
+        """
+        Lanza job SLURM con sbatch --wrap y retorna jobId (parsable).
+        wrap_command: comando a ejecutar (ej 'echo 42 > /tmp/result_${SLURM_JOB_ID}.txt')
+        """
+        # Escapa comillas simples para --wrap
+        safe = wrap_command.replace("'", "'\"'\"'")
+        part = f" -p {partition}" if partition else ""
+        cmd = f"sbatch --parsable --job-name={job_name}{part} --wrap='{safe}' 2>&1"
+        code, out, err = await self._run(conn, cmd, timeout=10.0)
+        if code != 0 or not out.strip():
+            raise RuntimeError(f"sbatch failed code={code} out={out} err={err}")
+        # sbatch --parsable puede devolver "1234" o "Submitted batch job 1234" o "1234;cluster"
+        token = out.strip().split()[0].split(";")[0].split()[-1]
+        # valida que sea numérico
+        if not token.isdigit():
+            # fallback: busca dígitos
+            m = re.search(r"(\d+)", out)
+            if m:
+                token = m.group(1)
+            else:
+                raise RuntimeError(f"no jobId en sbatch output: {out}")
+        logger.info("submit_job %s -> %s", job_name, token)
+        return token
+
+    async def submit_notifier_job(
+        self, conn: asyncssh.SSHClientConnection, depends_on: str, wrap_command: str, job_name: str = "notifier"
+    ) -> str:
+        safe = wrap_command.replace("'", "'\"'\"'")
+        cmd = f"sbatch --parsable --dependency=afterany:{depends_on} --job-name={job_name} --wrap='{safe}' 2>&1"
+        code, out, err = await self._run(conn, cmd, timeout=10.0)
+        if code != 0 or not out.strip():
+            raise RuntimeError(f"sbatch notifier failed code={code} out={out} err={err}")
+        token = out.strip().split()[0].split(";")[0].split()[-1]
+        if not token.isdigit():
+            m = re.search(r"(\d+)", out)
+            if m:
+                token = m.group(1)
+            else:
+                raise RuntimeError(f"no notifier jobId en sbatch output: {out}")
+        logger.info("submit_notifier depends %s -> %s", depends_on, token)
+        return token
 
     async def _fallback_status(self, conn: asyncssh.SSHClientConnection, node: NodeConfig) -> NodeStatus:
         # GPUs totales via nvidia-smi -L | wc -l o query
