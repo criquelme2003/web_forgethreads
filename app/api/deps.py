@@ -4,6 +4,8 @@ from fastapi import HTTPException, Request, status
 
 from app.core.config import get_settings
 from app.repositories.slurm import SlurmRepository
+from app.services.job_store import JobStore
+from app.services.job_store import job_store as _job_store_singleton
 from app.services.node_selector import NodeSelector
 from app.ssh.pool import SSHConnectionPool
 

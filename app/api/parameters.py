@@ -1,50 +1,54 @@
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 
-from app.api.deps import require_user
+from app.api.deps import get_node_selector, require_user
+from app.services.node_selector import NodeSelector
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["parameters"], prefix="/front")
 
-_FORM_HTML = """<!DOCTYPE html>
+_FORM_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Parámetros — MaxMin</title>
   <style>
-    :root{ --bg:#f8f9fb; --card:#ffffff; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --accent:#1f2937; --accent-hover:#111827; --ring:#93c5fd; --ok:#065f46; --err:#991b1b; --radius:8px; }
-    *{box-sizing:border-box}
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
-    a{color:inherit}
-    .topbar{border-bottom:1px solid var(--border);background:#fff}
-    .topbar-inner{max-width:960px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;justify-content:space-between}
-    .brand{font-size:15px;letter-spacing:.02em;font-weight:600}
-    .brand span{font-weight:400;color:var(--muted)}
-    .nav{font-size:13px;color:var(--muted);display:flex;gap:16px}
-    .nav a{text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px}
-    .nav a:hover{color:var(--text);border-color:var(--border)}
-    .wrap{max-width:640px;margin:32px auto;padding:0 20px}
-    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px}
-    h1{margin:0 0 6px;font-size:22px;font-weight:650;letter-spacing:-.015em}
-    .sub{margin:0 0 22px;color:var(--muted);font-size:13.5px;line-height:1.6}
-    form{display:grid;gap:16px}
-    .field{display:grid;gap:6px}
-    .field label{font-size:12.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#374151}
-    .field input{width:100%;padding:10px 11px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:14px;color:var(--text);outline:none}
-    .field input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px var(--ring)}
-    .field .hint{font-size:12px;color:var(--muted)}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-    @media(max-width:560px){ .row{grid-template-columns:1fr} }
-    .actions{margin-top:4px;display:flex;align-items:center;gap:12px}
-    button[type=submit]{appearance:none;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:10px 16px;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer}
-    button[type=submit]:hover{background:var(--accent-hover)}
-    button[type=submit]:disabled{opacity:.6;cursor:not-allowed}
-    .status{font-size:13.5px;min-height:1.4em}
-    .status.ok{color:var(--ok)} .status.err{color:var(--err)} .status.muted{color:var(--muted)}
-    .foot{margin-top:18px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:12px}
-    .mono{font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+    :root{{ --bg:#f8f9fb; --card:#ffffff; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --accent:#1f2937; --accent-hover:#111827; --ring:#93c5fd; --ok:#065f46; --err:#991b1b; --radius:8px; }}
+    *{{box-sizing:border-box}}
+    html,body{{margin:0;padding:0;background:var(--bg);color:var(--text);font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}}
+    a{{color:inherit}}
+    .topbar{{border-bottom:1px solid var(--border);background:#fff}}
+    .topbar-inner{{max-width:960px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;justify-content:space-between}}
+    .brand{{font-size:15px;letter-spacing:.02em;font-weight:600}}
+    .brand span{{font-weight:400;color:var(--muted)}}
+    .nav{{font-size:13px;color:var(--muted);display:flex;gap:16px}}
+    .nav a{{text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px}}
+    .nav a:hover{{color:var(--text);border-color:var(--border)}}
+    .wrap{{max-width:640px;margin:32px auto;padding:0 20px}}
+    .card{{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px}}
+    h1{{margin:0 0 6px;font-size:22px;font-weight:650;letter-spacing:-.015em}}
+    .sub{{margin:0 0 22px;color:var(--muted);font-size:13.5px;line-height:1.6}}
+    form{{display:grid;gap:16px}}
+    .field{{display:grid;gap:6px}}
+    .field label{{font-size:12.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#374151}}
+    .field input,.field select{{width:100%;padding:10px 11px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:14px;color:var(--text);outline:none}}
+    .field input:focus,.field select:focus{{border-color:#3b82f6;box-shadow:0 0 0 3px var(--ring)}}
+    .field .hint{{font-size:12px;color:var(--muted)}}
+    .row{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
+    @media(max-width:560px){{ .row{{grid-template-columns:1fr}} }}
+    .actions{{margin-top:4px;display:flex;align-items:center;gap:12px}}
+    button[type=submit]{{appearance:none;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:10px 16px;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer}}
+    button[type=submit]:hover{{background:var(--accent-hover)}}
+    button[type=submit]:disabled{{opacity:.6;cursor:not-allowed}}
+    .status{{font-size:13.5px;min-height:1.4em}}
+    .status.ok{{color:var(--ok)}} .status.err{{color:var(--err)}} .status.muted{{color:var(--muted)}}
+    .foot{{margin-top:18px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:12px}}
+    .mono{{font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}}
   </style>
 </head>
 <body>
@@ -61,7 +65,7 @@ _FORM_HTML = """<!DOCTYPE html>
   <main class="wrap">
     <div class="card">
       <h1>Ejecución MaxMin</h1>
-      <p class="sub">Define los parámetros del grafo. Se enviarán a <span class="mono">app/execute_maxmin</span> y quedarán encolados en el nodo con mejor disponibilidad.</p>
+      <p class="sub">Define los parámetros del grafo. Se enviarán a <span class="mono">app/execute_maxmin</span> y quedarán encolados en el nodo elegido.</p>
       <form id="parameters-form" novalidate>
         <div class="row">
           <div class="field">
@@ -86,6 +90,14 @@ _FORM_HTML = """<!DOCTYPE html>
             <input id="conectividad_promedio" type="number" name="conectividad_promedio" inputmode="numeric" min="0" step="1" required placeholder="ej. 8" />
             <div class="hint">Entero ≥ 0</div>
           </div>
+        </div>
+        <div class="field">
+          <label for="nodo">Nodo / GPU objetivo</label>
+          <select id="nodo" name="nodo">
+            <option value="">Automático (mejor disponible)</option>
+            {node_options}
+          </select>
+          <div class="hint">{node_hint}</div>
         </div>
         <div class="actions">
           <button type="submit" id="submit-btn">Encolar tarea</button>
@@ -138,7 +150,7 @@ _FORM_HTML = """<!DOCTYPE html>
       e.preventDefault();
       setStatus('', 'muted');
       const fd = new FormData(form);
-      const payload = {
+      const payload = {{
         numero_nodos: parseInt(fd.get('numero_nodos'),10),
         threshold: parseFloat(fd.get('threshold')),
         conectividad_promedio: parseInt(fd.get('conectividad_promedio'),10),
@@ -152,7 +164,7 @@ _FORM_HTML = """<!DOCTYPE html>
       try{
         const res = await fetch('/app/execute_maxmin', {
           method:'POST',
-          headers:{'Content-Type':'application/json'},
+          headers:{{'Content-Type':'application/json'}},
           body: JSON.stringify(payload)
         });
         const body = await res.json().catch(()=>({}));
@@ -167,30 +179,55 @@ _FORM_HTML = """<!DOCTYPE html>
           // form.reset();
         } else if(res.status===401){
           setStatus('Sesión expirada. Ve a /front/login', 'err');
-        } else {
+        }} else {{
           const msg = body.detail ? (Array.isArray(body.detail)? body.detail.map(d=>d.msg).join(' · ') : body.detail) : (body.message || 'Error al encolar');
           setStatus(msg, 'err');
         }
       } catch(err){
         js.textContent = JSON.stringify({error: String(err)}, null, 2);
         setStatus('Error de red.', 'err');
-      } finally {
+      }} finally {{
         btn.disabled = false; btn.textContent = 'Encolar tarea';
-      }
-    });
+      }}
+    }});
   </script>
 </body>
 </html>
 """
 
 
+async def _render_form(selector: NodeSelector) -> str:
+    node_options = ""
+    node_hint = "Nodo/GPU específico donde se lanzará el job."
+    try:
+        statuses = await selector.get_all_status()
+    except Exception as e:
+        logger.warning("No se pudo consultar disponibilidad de nodos para el formulario: %s", e)
+        node_hint = "No se pudo consultar el cluster; se usará selección automática."
+    else:
+        available = [s for s in statuses if s.is_available]
+        for s in available:
+            node_options += (
+                f'<option value="{s.name}">{s.name} '
+                f"({s.gpus_free}/{s.gpus_total} GPU libres)</option>\n"
+            )
+        if not available:
+            node_hint = "Ningún nodo disponible por ahora; se usará selección automática."
+    return _FORM_TEMPLATE.format(node_options=node_options, node_hint=node_hint)
+
+
 @router.get("/parameters", response_class=HTMLResponse)
-def parameters_form(user: Annotated[str, Depends(require_user)]) -> str:
-    return _FORM_HTML
+async def parameters_form(
+    user: Annotated[str, Depends(require_user)],
+    selector: Annotated[NodeSelector, Depends(get_node_selector)],
+) -> str:
+    return await _render_form(selector)
 
 
 @router.get("/execute_maxmin", response_class=HTMLResponse)
-def execute_maxmin_form(user: Annotated[str, Depends(require_user)]) -> str:
+async def execute_maxmin_form(
+    user: Annotated[str, Depends(require_user)],
+    selector: Annotated[NodeSelector, Depends(get_node_selector)],
+) -> str:
     """Alias para /parameters, misma UI profesional."""
-    return _FORM_HTML
-
+    return await _render_form(selector)
