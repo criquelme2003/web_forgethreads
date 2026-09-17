@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-forgethreads
+  labels:
+    app: wf-deploy
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: web-forgethreads
+
+  template:
+    metadata:
+      labels:
+        app: web-forgethreads
+    spec:
+      containers:
+      - name: web-forgethreads
+        image: ghcr.io/criquelme2003/web_forgethreads_image:1.0.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+          name: http
+        envFrom:
+          - secretRef:
+              name: wfsecrets
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /docs
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /docs
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata: 
+  name: web-forgethreads
+  namespace: criquelme
+spec:
+  selector:
+    app: web-forgethreads
+  ports: 
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-forgethreads-ingress
+  namespace: criquelme
+  annotations:
+    # Anotaciones explícitas de external-dns, igual que en el ejemplo real
+    # (en vez de depender solo de "host" + el --default-targets del cluster).
+    external-dns.alpha.kubernetes.io/hostname: web-forgethreads.inf.uct.cl
+    external-dns.alpha.kubernetes.io/target: proxy.inf.uct.cl
+    external-dns.alpha.kubernetes.io/ttl: "1"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx          # confirmado con un despliegue real en este mismo cluster
+  tls:
+    - hosts: [ web-forgethreads.inf.uct.cl ]
+      secretName: inf-uct-cl-tls
+  rules:
+    - host: web-forgethreads.inf.uct.cl
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-forgethreads
+                port:
+                  number: 80
+ 
+
+
