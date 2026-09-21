@@ -4,9 +4,42 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
+  <style>
+    :root{ --bg:#f8f9fb; --card:#fff; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --accent:#1f2937; --radius:8px; }
+    *{box-sizing:border-box} html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+    a{color:inherit}
+    .topbar{border-bottom:1px solid var(--border);background:#fff}
+    .topbar-inner{max-width:960px;margin:0 auto;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+    .brand{font-weight:600;font-size:15px} .brand span{font-weight:400;color:var(--muted)}
+    .nav{font-size:13px;color:var(--muted);display:flex;gap:16px} .nav a{text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px} .nav a:hover{color:var(--text);border-color:var(--border)}
+    .wrap{max-width:960px;margin:28px auto;padding:0 20px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+    h1{margin:0 0 8px;font-size:18px;font-weight:650;letter-spacing:-.01em}
+    .sub{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.5}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+    pre.output{background:#111827;color:#e5e7eb;border:1px solid #1f2937;padding:14px;border-radius:6px;overflow:auto;font-size:12.5px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#f3f4f6;border:1px solid var(--border);font-size:11px;color:var(--muted)}
+  </style>
 </head>
 <body>
-  <h1>{{ heading }} {{ node_info }}</h1>
-  <pre>{{ output }}</pre>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">forgethreads <span>· GPU</span></div>
+      <nav class="nav">
+        <a href="/front/parameters">Encolar</a>
+        <a href="/front/jobs">Trabajos</a>
+        <a href="/front/gpu_status">GPU</a>
+        <a href="/front/cluster_status">Cluster</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="card">
+      <h1>{{ heading }}</h1>
+      {% if node_info %}<p class="sub"><span class="pill">{{ node_info }}</span></p>{% endif %}
+      <pre class="output mono">{{ output }}</pre>
+      <p class="small muted" style="margin-top:12px;font-size:12px;color:var(--muted)">Salida de <span class="mono">nvidia-smi</span> vía <span class="mono">NodeSelector</span> `app/services/node_selector.py` · <a href="/front/cluster_status">ver cluster</a></p>
+    </div>
+  </main>
 </body>
 </html>

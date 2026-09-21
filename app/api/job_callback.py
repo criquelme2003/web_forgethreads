@@ -63,6 +63,33 @@ async def job_callback(
     return {"received": True}
 
 
+@router.get("/app/jobs", response_model=list[JobStatusResponse])
+async def list_jobs(
+    user: Annotated[str, Depends(require_user)],
+    store: Annotated[JobStore, Depends(get_job_store)],
+    status: str | None = None,
+) -> list[JobStatusResponse]:
+    """Lista trabajos; ?status=pending filtra pendientes (para polling). SQLite persiste entre reinicios."""
+    records = await store.list_all()
+    out: list[JobStatusResponse] = []
+    for r in records:
+        if status and r.status != status:
+            continue
+        out.append(
+            JobStatusResponse(
+                job_id=r.job_id,
+                status=r.status,
+                node=r.node,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                effective_order=r.effective_order,
+                computation_time_s=r.computation_time_s,
+                logs=r.logs,
+            )
+        )
+    return out
+
+
 @router.get("/app/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job(
     job_id: str,

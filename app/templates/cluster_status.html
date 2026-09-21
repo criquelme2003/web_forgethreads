@@ -1,27 +1,92 @@
 <!DOCTYPE html>
 <html lang="es">
-<head><meta charset="UTF-8" /><title>Cluster Status</title></head>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cluster Status — MaxMin</title>
+  <style>
+    :root{ --bg:#f8f9fb; --card:#fff; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --accent:#1f2937; --radius:8px; --ok:#065f46; --warn:#92400e; --err:#991b1b; }
+    *{box-sizing:border-box} html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+    a{color:inherit}
+    .topbar{border-bottom:1px solid var(--border);background:#fff}
+    .topbar-inner{max-width:960px;margin:0 auto;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+    .brand{font-weight:600;font-size:15px} .brand span{font-weight:400;color:var(--muted)}
+    .nav{font-size:13px;color:var(--muted);display:flex;gap:16px} .nav a{text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px} .nav a:hover{color:var(--text);border-color:var(--border)} .nav a.active{color:var(--text);border-color:var(--text)}
+    .wrap{max-width:960px;margin:28px auto;padding:0 20px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+    h1{margin:0 0 6px;font-size:18px;font-weight:650}
+    .sub{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.6}
+    .controls{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+    .btn{padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;text-decoration:none;color:var(--text)}
+    .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left}
+    th{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#6b7280;background:#f9fafb}
+    tr:hover td{background:#f9fafb}
+    .badge{display:inline-block;padding:2px 7px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase}
+    .badge.idle{background:#d1fae5;color:var(--ok);border:1px solid #6ee7b7}
+    .badge.mix{background:#fef3c7;color:var(--warn);border:1px solid #fcd34d}
+    .badge.alloc{background:#e0e7ff;color:#3730a3;border:1px solid #a5b4fc}
+    .badge.drain,.badge.down,.badge.unknown{background:#fee2e2;color:var(--err);border:1px solid #fecaca}
+    .badge.yes{background:#d1fae5;color:var(--ok);border:1px solid #6ee7b7}
+    .badge.no{background:#fee2e2;color:var(--err);border:1px solid #fecaca}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px}
+    .muted{color:var(--muted)} .pill{padding:2px 6px;border:1px solid var(--border);border-radius:999px;background:#f9fafb;font-size:11px}
+  </style>
+</head>
 <body>
-  <h1>Cluster Status (GPU priorizada)</h1>
-  {% if check_idle %}
-    <p>GPU idle threshold: {{ gpu_idle_threshold }}% (util &lt; threshold = idle)</p>
-  {% else %}
-    <p><a href="?check_idle=true">Ver con check GPU idle (nvidia-smi)</a></p>
-  {% endif %}
-  <table border="1" cellpadding="5" cellspacing="0">
-    <tr>
-      <th>Nodo</th><th>Host</th><th>Estado SLURM</th><th>GPUs libres</th><th>CPUs libres</th>
-      <th>Jobs pendientes</th><th>Score</th><th>Reachable</th>
-      {% if check_idle %}<th>GPU idle?</th><th>GPU utils</th>{% endif %}
-    </tr>
-    {% for row in rows %}
-    <tr>
-      <td>{{ row.name }}</td><td>{{ row.host }}</td><td>{{ row.state }}</td>
-      <td>{{ row.gpus_free }}/{{ row.gpus_total }}</td><td>{{ row.cpus_free }}/{{ row.cpus_total }}</td>
-      <td>{{ row.pending_jobs }}</td><td>{{ "%.1f"|format(row.score) }}</td><td>{{ "sí" if row.reachable else "no" }}</td>
-      {% if check_idle %}<td>{{ row.idle_str }}</td><td>{{ row.utils_str }}</td>{% endif %}
-    </tr>
-    {% endfor %}
-  </table>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">forgethreads <span>· Cluster</span></div>
+      <nav class="nav">
+        <a href="/front/parameters">Encolar</a>
+        <a href="/front/jobs">Trabajos</a>
+        <a href="/front/gpu_status">GPU</a>
+        <a href="/front/cluster_status" class="active">Cluster</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="card">
+      <h1>Cluster Status</h1>
+      <p class="sub">Disponibilidad SLURM + score GPU-priorizado <span class="mono">app/services/node_selector.py:51</span> · <span class="mono">idle=100 mix=50 alloc=5</span> + <span class="mono">gpu*50 cpu*30</span> · sqlite no aplica aquí, es sondeo SSH directo.</p>
+      <div class="controls">
+        {% if check_idle %}
+          <span class="pill mono">GPU idle threshold: {{ gpu_idle_threshold }}% (util &lt; threshold = idle) · nvidia-smi</span>
+          <a class="btn" href="/front/cluster_status">Ver sin idle</a>
+        {% else %}
+          <a class="btn primary" href="?check_idle=true">Ver con check GPU idle (nvidia-smi)</a>
+        {% endif %}
+        <a class="btn" href="/front/gpu_status">Probar mejor nodo</a>
+      </div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Nodo</th><th>Host</th><th>Estado</th><th>GPUs libres</th><th>CPUs libres</th>
+              <th>Jobs pend.</th><th>Score</th><th>Reachable</th>
+              {% if check_idle %}<th>GPU idle?</th><th>GPU utils</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <td class="mono">{{ row.name }}</td>
+              <td class="mono small">{{ row.host }}</td>
+              <td><span class="badge {{ row.state }}">{{ row.state }}</span></td>
+              <td>{{ row.gpus_free }}/{{ row.gpus_total }}</td>
+              <td>{{ row.cpus_free }}/{{ row.cpus_total }}</td>
+              <td>{{ row.pending_jobs }}</td>
+              <td class="mono">{{ "%.1f"|format(row.score) }}</td>
+              <td>{% if row.reachable %}<span class="badge yes">sí</span>{% else %}<span class="badge no">no</span>{% endif %}</td>
+              {% if check_idle %}<td>{{ row.idle_str }}</td><td class="mono">{{ row.utils_str }}</td>{% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted" style="margin-top:10px;font-size:11px">Filas ordenadas por <span class="mono">score</span> descendente · <span class="mono">has_idle_gpu</span> solo aparece con <span class="mono">?check_idle=true</span> vía <span class="mono">nvidia-smi --query-gpu=utilization.gpu</span> `app/repositories/slurm.py:194`.</p>
+    </div>
+  </main>
 </body>
 </html>

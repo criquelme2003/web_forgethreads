@@ -44,6 +44,7 @@
       <div class="brand">forgethreads <span>· MaxMin</span></div>
       <nav class="nav">
         <a href="/front/login">Sesión</a>
+        <a href="/front/jobs">Trabajos</a>
         <a href="/front/gpu_status">GPU</a>
         <a href="/front/cluster_status">Cluster</a>
       </nav>
@@ -114,6 +115,15 @@
         <div style="font-size:11px; color:var(--muted)">El nodo se elige por el selector (idle por defecto <span class="mono">app/services/node_selector.py</span>) salvo que se elija uno manualmente arriba. El notifier reporta el resultado a <span class="mono">POST /app/job_callback</span>.</div>
       </div>
     </div>
+
+    <div class="card" style="margin-top:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0;font-size:15px;font-weight:650">Trabajos pendientes</h2>
+        <a href="/front/jobs" style="font-size:12px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--border)">ver todos →</a>
+      </div>
+      <p class="sub" style="margin:0 0 10px">Polling <span class="mono">GET /app/jobs?status=pending</span> cada 2s · sqlite <span class="mono">data/jobs.db</span></p>
+      <div id="pending-list" class="small muted">Cargando…</div>
+    </div>
   </main>
   <script>
     const form = document.getElementById('parameters-form');
@@ -167,6 +177,19 @@
         btn.disabled = false; btn.textContent = 'Encolar tarea';
       }
     });
+
+    // sección ver trabajos pendientes (inline polling)
+    const pendingEl = document.getElementById('pending-list');
+    async function loadPending(){
+      try{
+        const r = await fetch('/app/jobs?status=pending', {credentials:'include'});
+        if(r.status===401){ pendingEl.innerHTML='<span class="muted">Sesión expirada</span>'; return; }
+        const jobs = await r.json().catch(()=>[]);
+        if(!Array.isArray(jobs) || jobs.length===0){ pendingEl.innerHTML='<span class="muted">Sin pendientes</span>'; return; }
+        pendingEl.innerHTML = '<div style="display:grid;gap:6px">' + jobs.slice(0,5).map(j=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:#f9fafb"><span class="mono">${j.job_id}</span><span class="small" style="display:flex;gap:6px;align-items:center"><span style="padding:2px 6px;border-radius:999px;background:#fef3c7;border:1px solid #fcd34d;font-size:11px">${j.status}</span>${j.node}</span></div>`).join('') + (jobs.length>5?`<div class="small muted">+${jobs.length-5} más · <a href="/front/jobs">ver todos</a></div>`:'') + '</div>';
+      }catch{ pendingEl.textContent='Error'; }
+    }
+    loadPending(); setInterval(loadPending, 2000);
   </script>
 </body>
 </html>

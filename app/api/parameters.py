@@ -45,3 +45,26 @@ async def parameters_form(
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
 ) -> HTMLResponse:
     return await _render_form(request, selector)
+
+
+@router.get("/execute_maxmin", response_class=HTMLResponse)
+async def execute_maxmin_form(
+    request: Request,
+    user: Annotated[str, Depends(require_user)],
+    selector: Annotated[NodeSelector, Depends(get_node_selector)],
+) -> HTMLResponse:
+    return await _render_form(request, selector)
+
+
+@router.get("/jobs", response_class=HTMLResponse)
+async def jobs_page(
+    request: Request,
+    user: Annotated[str, Depends(require_user)],
+) -> HTMLResponse:
+    from app.core.config import get_settings
+
+    return templates.TemplateResponse(
+        request,
+        "jobs.html",
+        {"jobs_db_path": get_settings().jobs_db_path},
+    )

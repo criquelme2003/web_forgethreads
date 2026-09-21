@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trabajos — MaxMin</title>
+  <style>
+    :root{ --bg:#f8f9fb; --card:#fff; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --accent:#1f2937; --radius:8px; --ok:#065f46; --warn:#92400e; --err:#991b1b; }
+    *{box-sizing:border-box} html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+    .topbar{border-bottom:1px solid var(--border);background:#fff}
+    .topbar-inner{max-width:960px;margin:0 auto;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+    .brand{font-weight:600;font-size:15px} .brand span{font-weight:400;color:var(--muted)}
+    .nav{font-size:13px;color:var(--muted);display:flex;gap:16px} .nav a{text-decoration:none;color:inherit;border-bottom:1px solid transparent;padding-bottom:2px} .nav a:hover{color:var(--text);border-color:var(--border)} .nav a.active{color:var(--text);border-color:var(--text)}
+    .wrap{max-width:960px;margin:28px auto;padding:0 20px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+    h1{margin:0 0 6px;font-size:20px;font-weight:650} .sub{margin:0 0 14px;color:var(--muted);font-size:13px}
+    .controls{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+    .controls select,.controls button{padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px}
+    .controls button{cursor:pointer} .controls button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left}
+    th{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#6b7280;background:#f9fafb}
+    tr:hover td{background:#f9fafb}
+    .badge{display:inline-block;padding:2px 7px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase}
+    .badge.pending{background:#fef3c7;color:var(--warn);border:1px solid #fcd34d}
+    .badge.success{background:#d1fae5;color:var(--ok);border:1px solid #6ee7b7}
+    .badge.error{background:#fee2e2;color:var(--err);border:1px solid #fecaca}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+    .muted{color:var(--muted)} .small{font-size:12px}
+    .empty{padding:28px;text-align:center;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">forgethreads <span>· Trabajos</span></div>
+      <nav class="nav">
+        <a href="/front/parameters">Encolar</a>
+        <a href="/front/jobs" class="active">Trabajos</a>
+        <a href="/front/cluster_status">Cluster</a>
+        <a href="/front/gpu_status">GPU</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="card">
+      <h1>Trabajos encolados</h1>
+      <p class="sub">Persistidos en <span class="mono">sqlite {{ jobs_db_path }}</span> via <span class="mono">JobStore</span> `app/services/job_store.py` · polling cada 2s a <span class="mono">GET /app/jobs</span>.</p>
+      <div class="controls">
+        <select id="filter-status">
+          <option value="pending">Pendientes</option>
+          <option value="">Todos</option>
+          <option value="success">Completados</option>
+          <option value="error">Error</option>
+        </select>
+        <button id="refresh">Actualizar</button>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)"><input type="checkbox" id="auto" checked /> auto (2s)</label>
+        <span id="count" class="small muted"></span>
+      </div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr><th>Job ID</th><th>Estado</th><th>Nodo</th><th>Creado</th><th>Orden</th><th>Tiempo(s)</th></tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="6" class="empty">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="detail" hidden style="margin-top:16px;border:1px solid var(--border);border-radius:8px;padding:14px;background:#f9fafb">
+        <div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#374151;margin-bottom:8px">Detalle <span id="detail-id" class="mono"></span></div>
+        <pre id="detail-json" class="mono" style="background:#fff;border:1px solid var(--border);padding:10px;border-radius:6px;overflow:auto;font-size:12px;margin:0;white-space:pre-wrap"></pre>
+      </div>
+    </div>
+  </main>
+  <script>
+    const tbody = document.getElementById('tbody');
+    const filter = document.getElementById('filter-status');
+    const auto = document.getElementById('auto');
+    const count = document.getElementById('count');
+    const detail = document.getElementById('detail');
+    const detailJson = document.getElementById('detail-json');
+    const detailId = document.getElementById('detail-id');
+    let jobs = [];
+
+    function fmt(iso){
+      try{ return new Date(iso).toLocaleString(); }catch{ return iso; }
+    }
+    function badge(s){
+      const cls = s==='pending'?'pending':s==='success'?'success':'error';
+      return `<span class="badge ${cls}">${s}</span>`;
+    }
+    async function fetchJobs(){
+      const qs = filter.value ? `?status=${encodeURIComponent(filter.value)}` : '';
+      const res = await fetch(`/app/jobs${qs}`, {credentials:'include'});
+      if(res.status===401){ tbody.innerHTML = `<tr><td colspan="6" class="empty">Sesión expirada — <a href="/front/login">login</a></td></tr>`; return; }
+      const data = await res.json().catch(()=>[]);
+      jobs = Array.isArray(data) ? data : [];
+      count.textContent = `${jobs.length} trabajos`;
+      if(jobs.length===0){
+        tbody.innerHTML = `<tr><td colspan="6" class="empty">Sin trabajos ${filter.value? '('+filter.value+')':''}</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = jobs.map(j=>`
+        <tr style="cursor:pointer" data-id="${j.job_id}">
+          <td class="mono">${j.job_id}</td>
+          <td>${badge(j.status)}</td>
+          <td>${j.node}</td>
+          <td class="small">${fmt(j.created_at)}</td>
+          <td>${j.effective_order ?? '—'}</td>
+          <td>${j.computation_time_s != null ? j.computation_time_s.toFixed(2) : '—'}</td>
+        </tr>
+      `).join('');
+      tbody.querySelectorAll('tr[data-id]').forEach(tr=>{
+        tr.addEventListener('click', async()=>{
+          const id = tr.dataset.id;
+          const r = await fetch(`/app/jobs/${id}`, {credentials:'include'});
+          const d = await r.json();
+          detail.hidden=false; detailId.textContent=id; detailJson.textContent=JSON.stringify(d,null,2);
+          detail.scrollIntoView({behavior:'smooth', block:'nearest'});
+        });
+      });
+    }
+    document.getElementById('refresh').addEventListener('click', fetchJobs);
+    filter.addEventListener('change', fetchJobs);
+    fetchJobs();
+    let iv = setInterval(()=>{ if(auto.checked) fetchJobs(); }, 2000);
+    window.addEventListener('beforeunload', ()=>clearInterval(iv));
+  </script>
+</body>
+</html>
