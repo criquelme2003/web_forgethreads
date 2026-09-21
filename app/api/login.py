@@ -1,4 +1,5 @@
 import secrets
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -32,4 +33,11 @@ def login(
             detail="Invalid credentials",
         )
     request.session["user"] = body.username
+    request.session["last_seen"] = time.time()
+    return LoginResponse(success=True)
+
+
+@router.post("/logout", response_model=LoginResponse)
+def logout(request: Request) -> LoginResponse:
+    request.session.clear()
     return LoginResponse(success=True)

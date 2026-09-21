@@ -16,7 +16,7 @@ app.add_middleware(
     secret_key=get_settings().session_secret_key,
     session_cookie="session",
     max_age=get_settings().session_max_age_seconds,
-    https_only=False,  # dev; en prod poner True
+    https_only=get_settings().session_cookie_secure,  # True solo si environment=prod (requiere HTTPS real)
     same_site="lax",
 )
 

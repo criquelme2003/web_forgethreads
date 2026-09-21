@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-
+from http.cookies import SimpleCookie
 from tests.conftest import PROTECTED_ROUTES, TEST_PASSWORD, TEST_USERNAME
 
 ROUTE_PATHS = [path for path, _ in PROTECTED_ROUTES]
@@ -11,6 +11,7 @@ def _login(client: TestClient) -> None:
         "/auth/login",
         json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
     )
+
     assert res.status_code == 200
 
 
@@ -26,6 +27,7 @@ def test_protected_route_served_after_login(
     _login(client)
     
     res = client.get(path)
+
     assert res.status_code == 200
     assert "text/html" in res.headers["content-type"]
     for marker in markers:
@@ -40,7 +42,8 @@ def test_protected_route_with_and_without_cookie(client: TestClient, path: str) 
     # Login: fija la cookie de sesión en el client
     _login(client)
     assert "session" in client.cookies
-
+    
+    
     # Con la cookie -> 200
     assert client.get(path).status_code == 200
 

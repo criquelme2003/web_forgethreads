@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    environment: str = "dev"  # "dev" o "prod"; controla flags dependientes de HTTPS (ej. cookie secure)
     auth_username: str
     auth_password: str
     session_secret_key: str
@@ -31,8 +32,14 @@ class Settings(BaseSettings):
     # --- Flujo de jobs SLURM (new_job + notifier) ---
     public_callback_base_url: str | None = None  # URL pública de este backend, alcanzable desde el cluster (ej https://web-forgethreads.inf.uct.cl). Si None se deduce de request
     scripts_wf_dir: str = "scripts_wf"  # ruta remota (relativa a $HOME del usuario SSH) del repo scripts_wf
-    session_max_age_seconds: int = 14 * 24 * 60 * 60  # debe coincidir con SessionMiddleware(max_age=...)
+    session_max_age_seconds: int = 15 * 24 * 60 * 60  # debe coincidir con SessionMiddleware(max_age=...)
+    session_idle_timeout_seconds: int = 24 * 60 * 60  # inactividad máxima antes de expirar la sesión (sliding window)
     jobs_db_path: str = "data/jobs.db"  # sqlite para persistencia de cola
+
+    @property
+    def session_cookie_secure(self) -> bool:
+        """Cookie de sesión con flag Secure solo si environment=prod (requiere HTTPS real)."""
+        return self.environment.lower() == "prod"
 
     def get_cluster_nodes(self) -> list["NodeConfig"]:
         """Retorna solo nodos configurados (ip + credenciales)."""
