@@ -68,14 +68,13 @@ metadata:
   name: web-forgethreads-ingress
   namespace: criquelme
   annotations:
-    # Anotaciones explícitas de external-dns, igual que en el ejemplo real
-    # (en vez de depender solo de "host" + el --default-targets del cluster).
+
     external-dns.alpha.kubernetes.io/hostname: web-forgethreads.inf.uct.cl
     external-dns.alpha.kubernetes.io/target: proxy.inf.uct.cl
     external-dns.alpha.kubernetes.io/ttl: "1"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 spec:
-  ingressClassName: nginx          # confirmado con un despliegue real en este mismo cluster
+  ingressClassName: nginx          
   tls:
     - hosts: [ web-forgethreads.inf.uct.cl ]
       secretName: inf-uct-cl-tls

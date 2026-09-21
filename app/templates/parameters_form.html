@@ -58,8 +58,8 @@
         <div class="row">
           <div class="field">
             <label for="numero_nodos">Número de nodos</label>
-            <input id="numero_nodos" type="number" name="numero_nodos" inputmode="numeric" min="1" step="1" required placeholder="ej. 5000" />
-            <div class="hint">Entero &gt; 0</div>
+            <input id="numero_nodos" type="number" name="numero_nodos" inputmode="numeric" min="1" max="10000" step="1" required placeholder="ej. 5000" />
+            <div class="hint">Entero entre 1 y 10000</div>
           </div>
           <div class="field">
             <label for="seed">Seed</label>
@@ -70,13 +70,13 @@
         <div class="row">
           <div class="field">
             <label for="threshold">Threshold</label>
-            <input id="threshold" type="number" name="threshold" step="any" required placeholder="ej. 0.15" />
-            <div class="hint">Float</div>
+            <input id="threshold" type="number" name="threshold" min="0" max="1" step="any" required placeholder="ej. 0.15" />
+            <div class="hint">Float entre 0 y 1</div>
           </div>
           <div class="field">
             <label for="conectividad_promedio">Conectividad promedio</label>
-            <input id="conectividad_promedio" type="number" name="conectividad_promedio" inputmode="numeric" min="0" step="1" required placeholder="ej. 8" />
-            <div class="hint">Entero ≥ 0</div>
+            <input id="conectividad_promedio" type="number" name="conectividad_promedio" inputmode="numeric" min="0" max="10000" step="1" required placeholder="ej. 8" />
+            <div class="hint">Entero ≥ 0 y menor que número de nodos</div>
           </div>
         </div>
         <div class="field">
@@ -149,8 +149,10 @@
         seed: parseInt(fd.get('seed'),10),
         nodo: nodoValue ? nodoValue : null
       };
-      if(!payload.numero_nodos || payload.numero_nodos<=0){ setStatus('Revisa número de nodos.', 'err'); return; }
-      if(!Number.isFinite(payload.threshold)){ setStatus('Revisa threshold.', 'err'); return; }
+      if(!payload.numero_nodos || payload.numero_nodos<=0 || payload.numero_nodos>10000){ setStatus('Revisa número de nodos (1-10000).', 'err'); return; }
+      if(!Number.isFinite(payload.threshold) || payload.threshold<0 || payload.threshold>1){ setStatus('Revisa threshold (0-1).', 'err'); return; }
+      if(!Number.isFinite(payload.conectividad_promedio) || payload.conectividad_promedio<0 || payload.conectividad_promedio>10000){ setStatus('Revisa conectividad promedio (0-10000).', 'err'); return; }
+      if(payload.conectividad_promedio >= payload.numero_nodos){ setStatus('Conectividad promedio debe ser menor que número de nodos.', 'err'); return; }
       btn.disabled = true; btn.textContent = 'Enviando…';
       jr.textContent = JSON.stringify(payload, null, 2);
       js.textContent = ''; debug.hidden=false;

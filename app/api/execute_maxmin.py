@@ -2,7 +2,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.api.deps import get_job_store, get_node_selector, get_ssh_pool, require_user
 from app.core.config import Settings, get_settings
@@ -35,6 +35,12 @@ class ExecuteMaxMinRequest(BaseModel):
     nodo: str | None = Field(default=None, description="Nodo/GPU objetivo; si se omite, se elige automáticamente")
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
+
+    @model_validator(mode="after")
+    def _check_conectividad_menor_que_nodos(self) -> "ExecuteMaxMinRequest":
+        if self.conectividad_promedio >= self.numero_nodos:
+            raise ValueError("conectividad_promedio debe ser menor que numero_nodos")
+        return self
 
 
 # Soporta alias comunes del front (numero_nodos, nodos_totales, etc)
