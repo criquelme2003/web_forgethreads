@@ -22,13 +22,11 @@ def build_new_job_command(
     threshold: float,
     conectividad_promedio: float,
     seed: int,
-    auth_token: str,
 ) -> str:
     return (
         f"cd {shlex.quote(scripts_wf_dir)} && "
         f"sbatch new_job.sh --nodos {numero_nodos} --thr {threshold} "
-        f"--conectividad {conectividad_promedio} --seed {seed} "
-        f"--auth-token {shlex.quote(auth_token)}"
+        f"--conectividad {conectividad_promedio} --seed {seed}"
     )
 
 

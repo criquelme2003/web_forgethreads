@@ -13,7 +13,8 @@ class SSHConnectionPool:
     """
     Pool de conexiones SSH directas a cada nodo del cluster.
     - Lazy: conecta bajo demanda.
-    - Reconnect: si conn.is_closed() -> reconecta.
+    - Reconnect: get_connection valida con un health check activo (no solo is_closed())
+      antes de reutilizar una conexión cacheada; si no responde, reconecta ahí mismo.
     - Thread-safe por nodo via asyncio.Lock.
     - Keepalive configurado via asyncssh.
     """
@@ -32,15 +33,26 @@ class SSHConnectionPool:
     def get_node_config(self, name: str) -> NodeConfig:
         return self._nodes[name]
 
+    async def _is_alive(self, conn: asyncssh.SSHClientConnection) -> bool:
+        """Health check activo: confirma que la conexión responde de verdad, no solo que el socket local sigue abierto."""
+        if conn.is_closed():
+            return False
+        try:
+            result = await asyncio.wait_for(conn.run("true"), timeout=3.0)
+            return result.exit_status == 0
+        except Exception:
+            return False
+
     async def get_connection(self, node_name: str) -> asyncssh.SSHClientConnection:
-        """Retorna conexión activa para el nodo, reconectando si es necesario."""
+        """Retorna conexión activa para el nodo, reconectando si el health check falla."""
         if node_name not in self._nodes:
             raise ValueError(f"Nodo desconocido: {node_name}")
         async with self._locks[node_name]:
             conn = self._conns[node_name]
-            if conn is not None and not conn.is_closed():
-                # health ping ligero (opcional, no bloqueante)
+            if conn is not None and await self._is_alive(conn):
                 return conn
+            if conn is not None:
+                conn.close()
             # (re)conectar
             cfg = self._nodes[node_name]
             logger.info("SSH connect %s@%s (%s)", cfg.username, cfg.host, cfg.name)
@@ -55,6 +67,7 @@ class SSHConnectionPool:
                 )
             except Exception as e:
                 logger.warning("SSH connect failed %s: %s", cfg.name, e)
+                self._conns[node_name] = None
                 raise
             self._conns[node_name] = conn
             return conn
@@ -68,29 +81,15 @@ class SSHConnectionPool:
             return None
 
     async def run_on_node(self, node_name: str, command: str, timeout: float = 10.0) -> asyncssh.SSHCompletedProcess | None:
-        """Helper: obtiene conexión y ejecuta comando. Reconecta 1 vez si la sesión murió."""
+        """Helper: obtiene conexión ya validada por get_connection y ejecuta el comando."""
         conn = await self.try_get_connection(node_name, timeout=self._connect_timeout)
         if conn is None:
             return None
         try:
-            result = await asyncio.wait_for(conn.run(command), timeout=timeout)
-            return result
+            return await asyncio.wait_for(conn.run(command), timeout=timeout)
         except (asyncssh.Error, OSError, asyncio.TimeoutError) as e:
-            logger.warning("run_on_node %s failed, retrying once: %s", node_name, e)
-            # invalidar y reintentar una vez
-            async with self._locks[node_name]:
-                old = self._conns[node_name]
-                if old is not None:
-                    old.close()
-                    self._conns[node_name] = None
-            conn2 = await self.try_get_connection(node_name, timeout=self._connect_timeout)
-            if conn2 is None:
-                return None
-            try:
-                return await asyncio.wait_for(conn2.run(command), timeout=timeout)
-            except Exception as e2:
-                logger.warning("retry run_on_node %s failed: %s", node_name, e2)
-                return None
+            logger.warning("run_on_node %s failed: %s", node_name, e)
+            return None
 
     async def warmup(self, concurrency: int = 3):
         """Pre-conecta todos los nodos en paralelo (best effort, no falla si uno cae)."""

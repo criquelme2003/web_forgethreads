@@ -1,5 +1,6 @@
 import asyncio
-from dataclasses import dataclass
+import secrets
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -17,6 +18,7 @@ class JobRecord:
     node: str
     created_at: datetime
     updated_at: datetime
+    token: str = field(repr=False, default="")
     effective_order: int | None = None
     computation_time_s: float | None = None
     logs: str | None = None
@@ -30,11 +32,20 @@ class JobStore:
         self._lock = asyncio.Lock()
 
     async def create(self, job_id: str, node: str) -> JobRecord:
+        """Crea el registro del job con un token propio (usado como --auth-token del notifier)."""
         now = datetime.now(UTC)
-        record = JobRecord(job_id=job_id, status="pending", node=node, created_at=now, updated_at=now)
+        token = secrets.token_urlsafe(32)
+        record = JobRecord(job_id=job_id, status="pending", node=node, created_at=now, updated_at=now, token=token)
         async with self._lock:
             self._jobs[job_id] = record
         return record
+
+    async def verify_token(self, job_id: str, token: str) -> bool:
+        async with self._lock:
+            record = self._jobs.get(job_id)
+        if record is None:
+            return False
+        return secrets.compare_digest(record.token, token or "")
 
     async def mark_error(self, job_id: str, node: str, logs: str) -> JobRecord:
         """Registra un job que quedó encolado en SLURM pero cuyo notifier no se pudo lanzar."""

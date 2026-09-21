@@ -19,17 +19,7 @@ PROTECTED_ROUTES = [
             'name="seed"',
             'name="nodo"',
         ),
-    ),
-    (
-        "/front/execute_maxmin",
-        (
-            'name="numero_nodos"',
-            'name="threshold"',
-            'name="conectividad_promedio"',
-            'name="seed"',
-            'name="nodo"',
-        ),
-    ),
+    )
 ]
 
 

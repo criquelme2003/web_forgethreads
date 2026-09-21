@@ -6,9 +6,10 @@ from app.ssh.pool import SSHConnectionPool
 # Singleton al estilo job_service._JOBS: un único pool/selector compartido por toda la app.
 # Evita el bug de re-crear pool por request cuando request.state/app.state no coincide
 # con el endpoint (fallback de deps.py).
+# SlurmRepository NO es singleton: no tiene estado (todos sus métodos reciben la conexión
+# SSH como parámetro), así que se instancia libremente donde se necesite (ver NodeSelector).
 _pool_singleton: SSHConnectionPool | None = None
 _selector_singleton: object | None = None  # NodeSelector, tipado lazy para evitar ciclo
-_slurm_singleton: object | None = None
 
 
 def get_pool_from_settings() -> SSHConnectionPool:
@@ -43,25 +44,14 @@ def get_selector_singleton() -> NodeSelector:
     return _selector_singleton  # type: ignore[return-value]
 
 
-def get_slurm_singleton() -> SlurmRepository:
-    global _slurm_singleton
-    if _slurm_singleton is None:
-        from app.repositories.slurm import SlurmRepository
-
-        _slurm_singleton = SlurmRepository()
-    return _slurm_singleton  # type: ignore[return-value]
-
-
-def set_singletons(pool: SSHConnectionPool, selector, slurm_repo) -> None:
+def set_singletons(pool: SSHConnectionPool, selector) -> None:
     """Fijado por lifespan para que deps reutilicen las instancias ya warmeadas."""
-    global _pool_singleton, _selector_singleton, _slurm_singleton
+    global _pool_singleton, _selector_singleton
     _pool_singleton = pool
     _selector_singleton = selector
-    _slurm_singleton = slurm_repo
 
 
 def clear_singletons() -> None:
-    global _pool_singleton, _selector_singleton, _slurm_singleton
+    global _pool_singleton, _selector_singleton
     _pool_singleton = None
     _selector_singleton = None
-    _slurm_singleton = None

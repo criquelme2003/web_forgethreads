@@ -18,7 +18,7 @@ async def global_lifespan(app: FastAPI):
     print(f"[DEBUG ssh_pool] pool creado en lifespan id={id(pool)}")
     selector = NodeSelector(pool=pool, slurm_repo=SlurmRepository(), cache_ttl=settings.slurm_poll_interval)
     # Fija singletons al estilo job_service._JOBS para que deps no creen pool por request
-    set_singletons(pool, selector, SlurmRepository())
+    set_singletons(pool, selector)
 
     # Warmup best-effort: no bloquea startup si un nodo está caído
     if pool.node_names:
@@ -35,11 +35,7 @@ async def global_lifespan(app: FastAPI):
         print("No SSH nodes configured (revisa .env CUDA*_IP)")
         logger.warning("No SSH nodes configured")
     
-    yield {
-        "ssh_pool": pool,
-        "node_selector": selector,
-        "slurm_repo": SlurmRepository(),
-    }
+    yield
 
     print("Closing SSH pool")
     try:
