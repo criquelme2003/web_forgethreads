@@ -14,6 +14,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=get_settings().session_secret_key,
     session_cookie="session",
+    max_age=get_settings().session_max_age_seconds,
     https_only=False,  # dev; en prod poner True
     same_site="lax",
 )
