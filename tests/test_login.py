@@ -30,6 +30,9 @@ def test_login_incomplete_body(client: TestClient) -> None:
 
 
 def test_front_login_served(client: TestClient) -> None:
+    # El SPA (build de Vite en app/front/dist) se sirve en /front/*.
+    # Requiere `npm run build` en app/front (el CI lo hace antes de pytest).
     res = client.get("/front/login")
     assert res.status_code == 200
     assert "text/html" in res.headers["content-type"]
+    assert '<div id="root">' in res.text

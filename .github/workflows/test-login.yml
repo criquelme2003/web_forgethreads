@@ -21,6 +21,18 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/front/package-lock.json
+
+      - name: Build frontend
+        run: |
+          npm ci --prefix app/front
+          npm run build --prefix app/front
+
       - name: Run login pytest
         env:
           AUTH_USERNAME: ci-admin
