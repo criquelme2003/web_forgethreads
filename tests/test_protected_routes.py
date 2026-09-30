@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-
+from http.cookies import SimpleCookie
 from tests.conftest import PROTECTED_ROUTES, TEST_PASSWORD, TEST_USERNAME
 
 # Todos los endpoints JSON bajo /app/* requieren sesión (401 sin cookie).
@@ -19,6 +19,7 @@ def _login(client: TestClient) -> None:
         "/auth/login",
         json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
     )
+
     assert res.status_code == 200
 
 
@@ -34,6 +35,7 @@ def test_protected_route_served_after_login(
     _login(client)
 
     res = client.get(path)
+
     assert res.status_code == 200
     assert "application/json" in res.headers["content-type"]
     for marker in markers:
@@ -47,7 +49,8 @@ def test_protected_route_with_and_without_cookie(client: TestClient) -> None:
     # Login: fija la cookie de sesión en el client
     _login(client)
     assert "session" in client.cookies
-
+    
+    
     # Con la cookie -> 200
     assert client.get("/app/jobs").status_code == 200
 

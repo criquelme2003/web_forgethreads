@@ -1,4 +1,5 @@
 import logging
+import time
 
 from fastapi import HTTPException, Request, status
 
@@ -14,13 +15,31 @@ def get_job_store():
 
 
 def require_user(request: Request) -> str:
-    """Devuelve el usuario de la sesión o lanza 401 si no hay sesión válida."""
+    """Devuelve el usuario de la sesión o lanza 401 si no hay sesión válida.
+
+    Aplica idle timeout: si no hubo actividad en los últimos
+    `session_idle_timeout_seconds`, la sesión se invalida aunque la cookie
+    siga vigente (max_age). Cada request válido renueva `last_seen`
+    (sliding window).
+    """
     user = request.session.get("user")
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+
+    settings = _get_effective_settings(request)
+    last_seen = request.session.get("last_seen")
+    now = time.time()
+    if last_seen is None or (now - last_seen) > settings.session_idle_timeout_seconds:
+        request.session.clear()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired due to inactivity",
+        )
+
+    request.session["last_seen"] = now
     return user
 
 
