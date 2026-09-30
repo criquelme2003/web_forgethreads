@@ -1,23 +1,34 @@
 import logging
-from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from app.api.deps import get_node_selector, require_user
 from app.services.node_selector import NodeSelector
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["parameters"], prefix="/front")
-
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+router = APIRouter(tags=["parameters"], prefix="/app")
 
 
-async def _render_form(request: Request, selector: NodeSelector) -> HTMLResponse:
-    node_options = ""
+class NodeOption(BaseModel):
+    value: str
+    label: str
+
+
+class AvailableNodesResponse(BaseModel):
+    options: list[NodeOption]
+    hint: str
+
+
+@router.get("/nodes/available", response_model=AvailableNodesResponse)
+async def available_nodes(
+    user: Annotated[str, Depends(require_user)],
+    selector: Annotated[NodeSelector, Depends(get_node_selector)],
+) -> AvailableNodesResponse:
+    """Opciones de nodo/GPU para el formulario de parámetros (antes render server-side con Jinja)."""
+    options: list[NodeOption] = []
     node_hint = "Nodo/GPU específico donde se lanzará el job."
     try:
         statuses = await selector.get_all_status(force_refresh=True)
@@ -27,44 +38,12 @@ async def _render_form(request: Request, selector: NodeSelector) -> HTMLResponse
     else:
         available = [s for s in statuses if s.is_available]
         for s in available:
-            node_options += (
-                f'<option value="{s.name}">{s.name} '
-                f"({s.gpus_free}/{s.gpus_total} GPU libres)</option>\n"
+            options.append(
+                NodeOption(
+                    value=s.name,
+                    label=f"{s.name} ({s.gpus_free}/{s.gpus_total} GPU libres)",
+                )
             )
         if not available:
             node_hint = "Ningún nodo disponible por ahora; se usará selección automática."
-    return templates.TemplateResponse(
-        request, "parameters_form.html", {"node_options": node_options, "node_hint": node_hint}
-    )
-
-
-@router.get("/parameters", response_class=HTMLResponse)
-async def parameters_form(
-    request: Request,
-    user: Annotated[str, Depends(require_user)],
-    selector: Annotated[NodeSelector, Depends(get_node_selector)],
-) -> HTMLResponse:
-    return await _render_form(request, selector)
-
-
-@router.get("/execute_maxmin", response_class=HTMLResponse)
-async def execute_maxmin_form(
-    request: Request,
-    user: Annotated[str, Depends(require_user)],
-    selector: Annotated[NodeSelector, Depends(get_node_selector)],
-) -> HTMLResponse:
-    return await _render_form(request, selector)
-
-
-@router.get("/jobs", response_class=HTMLResponse)
-async def jobs_page(
-    request: Request,
-    user: Annotated[str, Depends(require_user)],
-) -> HTMLResponse:
-    from app.core.config import get_settings
-
-    return templates.TemplateResponse(
-        request,
-        "jobs.html",
-        {"jobs_db_path": get_settings().jobs_db_path},
-    )
+    return AvailableNodesResponse(options=options, hint=node_hint)

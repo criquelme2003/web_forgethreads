@@ -1,5 +1,5 @@
-name: Login Test
-run-name: ${{ github.actor }} is testing login procedure 🚀
+name: Protected endpoints test
+run-name: ${{ github.actor }} is testing protected endpoints🚀
 on:
   push:
     branches: [main, "feat/**"]
@@ -38,4 +38,4 @@ jobs:
           AUTH_USERNAME: ci-admin
           AUTH_PASSWORD: ci-password
           SESSION_SECRET_KEY: ci-session-secret-key-0123456789
-        run: uv run pytest 
+        run: uv run pytest tests/test_protected_routes.py

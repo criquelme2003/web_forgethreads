@@ -8,18 +8,30 @@ TEST_USERNAME = "testadmin"
 TEST_PASSWORD = "testpass"
 
 # Rutas protegidas: requieren cookie de sesión válida.
-# (path, marcadores que deben aparecer en el HTML devuelto tras autenticarse)
+# (path, marcadores que deben aparecer en el JSON devuelto tras autenticarse)
 PROTECTED_ROUTES = [
     (
-        "/front/parameters",
+        "/app/ui-meta",
         (
-            'name="numero_nodos"',
-            'name="threshold"',
-            'name="conectividad_promedio"',
-            'name="seed"',
-            'name="nodo"',
+            '"jobs_db_path"',
+            '"gpu_idle_threshold"',
         ),
-    )
+    ),
+    (
+        "/app/nodes/available",
+        (
+            '"options"',
+            '"hint"',
+        ),
+    ),
+    (
+        "/app/cluster_status",
+        (
+            '"rows"',
+            '"check_idle"',
+            '"gpu_idle_threshold"',
+        ),
+    ),
 ]
 
 

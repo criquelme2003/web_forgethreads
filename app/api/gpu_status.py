@@ -1,42 +1,53 @@
-from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 
-from app.api.deps import get_node_selector, require_user
-from app.services.node_selector import NodeSelector
+from app.api.deps import get_node_selector, get_ssh_pool, require_user
+from app.services.node_selector import NoAvailableNodeError, NodeSelector
 
-router = APIRouter(tags=["parameters"], prefix="/front")
-
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+router = APIRouter(tags=["parameters"], prefix="/app")
 
 
-def _render_simple(request: Request, output: str, node_info: str = "", status_code: int = 200) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request,
-        "simple_output.html",
-        {"title": "NVIDIA-SMI Result", "heading": "NVIDIA-SMI Result", "node_info": node_info, "output": output},
-        status_code=status_code,
-    )
+class GpuStatusResponse(BaseModel):
+    node_info: str
+    output: str
 
 
-@router.get("/gpu_status", response_class=HTMLResponse)
-async def parameters_form(
+class ClusterRow(BaseModel):
+    name: str
+    host: str
+    state: str
+    gpus_free: int
+    gpus_total: int
+    cpus_free: int
+    cpus_total: int
+    pending_jobs: int
+    score: float
+    reachable: bool
+    idle_str: str | None = None
+    utils_str: str | None = None
+
+
+class ClusterStatusResponse(BaseModel):
+    rows: list[ClusterRow]
+    check_idle: bool
+    gpu_idle_threshold: int
+
+
+@router.get("/gpu_status", response_model=GpuStatusResponse)
+async def gpu_status(
     user: Annotated[str, Depends(require_user)],
-    req: Request,
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
     prefer_idle: bool = True,
     gpu_idle_threshold: int | None = None,
-) -> HTMLResponse:
+) -> GpuStatusResponse:
     """
     - Por defecto: intenta GPU idle (nvidia-smi util < threshold) vía `enrich_status_with_idle` `app/repositories/slurm.py:299`.
       Si hay nodo con GPU idle lo usa; si no, fallback automático a scoring normal `app/services/node_selector.py:51`.
-      Ej: /front/gpu_status  (idle por defecto)  o  ?prefer_idle=false para forzar solo score, o ?prefer_idle=true&gpu_idle_threshold=10
+      Ej: /app/gpu_status  (idle por defecto)  o  ?prefer_idle=false para forzar solo score, o ?prefer_idle=true&gpu_idle_threshold=10
     """
     from app.core.config import get_settings
-    from app.services.node_selector import NoAvailableNodeError
 
     if gpu_idle_threshold is None:
         try:
@@ -55,7 +66,7 @@ async def parameters_form(
                 "nvidia-smi", require_gpu=False, prefer_idle_gpu=prefer_idle, gpu_idle_threshold=gpu_idle_threshold
             )
         except NoAvailableNodeError as e:
-            return _render_simple(req, f"No hay nodos disponibles: {e}", "- Error", status_code=503)
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"No hay nodos disponibles: {e}")
 
     output = str(result.stdout) if result and result.stdout else "No output"
     idle_tag = ""
@@ -65,21 +76,20 @@ async def parameters_form(
         else:
             idle_tag = " | GPU idle: no (fallback score)"
     node_info = f"- Nodo: {node.name} ({node.host}) | GPUs libres: {node.gpus_free}/{node.gpus_total} | CPUs libres: {node.cpus_free}/{node.cpus_total} | Estado: {node.state.value}{idle_tag}"
-    return _render_simple(req, output, node_info)
+    return GpuStatusResponse(node_info=node_info, output=output)
 
 
-@router.get("/cluster_status", response_class=HTMLResponse)
+@router.get("/cluster_status", response_model=ClusterStatusResponse)
 async def cluster_status(
-    req: Request,
     user: Annotated[str, Depends(require_user)],
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
     check_idle: bool = False,
     gpu_idle_threshold: int | None = None,
-) -> HTMLResponse:
+) -> ClusterStatusResponse:
     """
-    Vista de disponibilidad de los 3 nodos (SLURM + score).
-    - Si check_idle=true: consulta nvidia-smi util en paralelo y muestra col GPU idle.
-      Ej: /front/cluster_status?check_idle=true
+    Disponibilidad de los 3 nodos (SLURM + score), ordenados por score descendente.
+    - Si check_idle=true: consulta nvidia-smi util en paralelo y agrega cols GPU idle.
+      Ej: /app/cluster_status?check_idle=true
     """
     from app.core.config import get_settings
 
@@ -99,43 +109,37 @@ async def cluster_status(
     else:
         statuses = await selector.get_all_status(force_refresh=True)
 
-    rows = []
+    rows: list[ClusterRow] = []
     for s in sorted(statuses, key=lambda x: selector.score(x), reverse=True):
-        row = {
-            "name": s.name,
-            "host": s.host,
-            "state": s.state.value,
-            "gpus_free": s.gpus_free,
-            "gpus_total": s.gpus_total,
-            "cpus_free": s.cpus_free,
-            "cpus_total": s.cpus_total,
-            "pending_jobs": s.pending_jobs,
-            "score": selector.score(s),
-            "reachable": s.reachable,
-        }
+        row = ClusterRow(
+            name=s.name,
+            host=s.host,
+            state=s.state.value,
+            gpus_free=s.gpus_free,
+            gpus_total=s.gpus_total,
+            cpus_free=s.cpus_free,
+            cpus_total=s.cpus_total,
+            pending_jobs=s.pending_jobs,
+            score=selector.score(s),
+            reachable=s.reachable,
+        )
         if check_idle:
-            row["idle_str"] = "sí" if s.has_idle_gpu else ("no" if s.has_idle_gpu is not None else "—")
-            row["utils_str"] = str(s.gpu_utils) if s.gpu_utils is not None else "—"
+            row.idle_str = "sí" if s.has_idle_gpu else ("no" if s.has_idle_gpu is not None else "—")
+            row.utils_str = str(s.gpu_utils) if s.gpu_utils is not None else "—"
         rows.append(row)
 
-    return templates.TemplateResponse(
-        req,
-        "cluster_status.html",
-        {"rows": rows, "check_idle": check_idle, "gpu_idle_threshold": gpu_idle_threshold},
-    )
+    return ClusterStatusResponse(rows=rows, check_idle=check_idle, gpu_idle_threshold=gpu_idle_threshold)
 
 
-@router.get("/gpu_status/{node_name}", response_class=HTMLResponse)
+@router.get("/gpu_status/{node_name}", response_model=GpuStatusResponse)
 async def gpu_status_by_node(
     node_name: str,
     user: Annotated[str, Depends(require_user)],
-    req: Request,
-) -> HTMLResponse:
+    request: Request,
+) -> GpuStatusResponse:
     """Debug: fuerza consulta a un nodo concreto (sin selector)."""
-    from app.api.deps import get_ssh_pool
-
-    pool = get_ssh_pool(req)
+    pool = get_ssh_pool(request)
     result = await pool.run_on_node(node_name, "nvidia-smi", timeout=10.0)
     if result is None:
-        return _render_simple(req, f"Error: no se pudo conectar a {node_name}", f"- Nodo: {node_name}")
-    return _render_simple(req, str(result.stdout), f"- Nodo: {node_name} (directo)")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Error: no se pudo conectar a {node_name}")
+    return GpuStatusResponse(node_info=f"- Nodo: {node_name} (directo)", output=str(result.stdout))
