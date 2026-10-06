@@ -1,6 +1,8 @@
 import json
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 from app.services.fe_input import load_fe_input
 from app.services.fe_remote import build_fe_input_files
@@ -115,3 +117,14 @@ def test_input_files_match_fe_job_contract(tmp_path) -> None:
     assert np.load(tmp_path / "CE.npy").shape == (1, 2, 3)
     assert np.load(tmp_path / "EE.npy").dtype == np.float32
     assert json.loads(files["meta.json"]) == meta
+
+
+@pytest.mark.parametrize("folder", ["docs/ejemplos_fe", "docs/ejemplos_fe/excel_cl"])
+def test_example_csvs_are_valid(folder: str) -> None:
+    base = Path(__file__).resolve().parent.parent / folder
+    texts = [(base / f"{name}.csv").read_text(encoding="utf-8") for name in ("CC", "CE", "EE")]
+
+    result = load_fe_input(*texts)
+
+    assert result.valid, _errors(result)
+    assert (len(result.causes), len(result.effects)) == (4, 3)

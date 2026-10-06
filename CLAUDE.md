@@ -27,7 +27,7 @@ uv run uvicorn app.main:app --reload            # servidor local
 
 1. `POST /app/execute_maxmin` valida, resuelve nodo y corre `sbatch new_job.sh` por SSH → parsea JOBID.
 2. `JobStore.create` genera un token por job.
-3. Se encadena `sbatch --dependency=afterok:<id> notifier.sh` con ese token.
+3. Se encadena `sbatch --dependency=afterany:<id> notifier.sh` con ese token (corre aunque el job falle).
 4. `notifier.sh` llama a `POST /app/job_callback` con `Authorization: Bearer <token>` → se actualiza el registro.
 
 ### Cálculo de caminos (forgeffects)
