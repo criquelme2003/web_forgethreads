@@ -101,3 +101,15 @@ tr.row-err th{background:#fee2e2;color:var(--err)}
 .sankey-node:focus-visible rect:last-of-type{stroke:var(--text);stroke-width:1.5px}
 .sankey-tip{position:absolute;pointer-events:none;background:#fff;border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);max-width:220px;z-index:2}
 .sankey-tip strong{font-size:13px}
+
+/* ingreso manual de matrices */
+.manual{display:grid;gap:16px}
+.field textarea{width:100%;padding:10px 11px;border:1px solid #d1d5db;border-radius:6px;font:inherit;font-size:14px;resize:vertical;outline:none}
+.field textarea:focus{border-color:#3b82f6;box-shadow:0 0 0 3px var(--ring)}
+.manual-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+table.matrix td:has(.cell-input){padding:2px}
+.cell-input{width:64px;padding:5px 6px;border:1px solid #d1d5db;border-radius:4px;font:12px ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;text-align:right;background:#fff;color:var(--text)}
+.cell-input:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 2px var(--ring)}
+.cell-input:disabled{background:#f3f4f6;color:var(--muted);border-color:var(--border)}
+.cell-input.cell-empty{background:#fffbeb;border-color:#fcd34d}
+td.cell-err .cell-input{background:#fee2e2;border-color:#fca5a5;color:var(--err)}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch, apiJson } from '../api.js';
+import ManualMatrices from '../components/ManualMatrices.jsx';
 
 const MATRICES = [
   { key: 'cc', name: 'CC', shape: 'm × m', hint: 'Causas × causas' },
@@ -57,7 +58,9 @@ function Preview({ name, preview, errors }) {
 
 export default function FeExecute() {
   const navigate = useNavigate();
+  const [mode, setMode] = useState('csv'); // 'csv' | 'manual'
   const [texts, setTexts] = useState({ cc: null, ce: null, ee: null });
+  const [manualTexts, setManualTexts] = useState(null);
   const [fileNames, setFileNames] = useState({});
   const [validation, setValidation] = useState(null);
   const [validating, setValidating] = useState(false);
@@ -75,7 +78,9 @@ export default function FeExecute() {
       .catch(() => {});
   }, []);
 
-  const allLoaded = MATRICES.every((m) => texts[m.key] != null);
+  // Ambos modos producen los mismos CSV; la validación y el lanzamiento no distinguen el origen.
+  const active = mode === 'csv' ? texts : manualTexts || { cc: null, ce: null, ee: null };
+  const allLoaded = MATRICES.every((m) => active[m.key] != null);
 
   useEffect(() => {
     if (!allLoaded) {
@@ -87,7 +92,7 @@ export default function FeExecute() {
     apiFetch('/app/fe/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(texts),
+      body: JSON.stringify(active),
     })
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
@@ -105,7 +110,7 @@ export default function FeExecute() {
     return () => {
       cancelled = true;
     };
-  }, [texts, allLoaded]);
+  }, [active, allLoaded]);
 
   async function onFile(key, file) {
     if (!file) {
@@ -135,7 +140,7 @@ export default function FeExecute() {
       const res = await apiFetch('/app/fe/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...texts, thr: thrValue, maxorder: maxorderValue, nodo: nodo || null }),
+        body: JSON.stringify({ ...active, thr: thrValue, maxorder: maxorderValue, nodo: nodo || null }),
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -159,17 +164,26 @@ export default function FeExecute() {
   const tabErrors = validation ? validation.errors.filter((e) => e.matrix === tab) : [];
   const globalErrors = validation ? validation.errors.filter((e) => e.row == null || e.col == null) : [];
   const cellErrorCount = validation ? validation.errors.length - globalErrors.length : 0;
+  const emptyCount = validation ? validation.errors.filter((e) => e.message === 'celda vacía').length : 0;
 
   return (
     <div className="card card-form">
       <h1 style={{ fontSize: 22 }}>Cálculo de caminos</h1>
       <p className="sub">
-        Sube las matrices CC, CE y EE de un experto. Cada CSV lleva las etiquetas en la primera fila y la primera
-        columna; se acepta separador <span className="mono">,</span> o <span className="mono">;</span> y decimal
-        con punto o coma. Los efectos olvidados se calculan con <span className="mono">forgeffects</span> en el cluster.
+        Ingresa las matrices CC, CE y EE de un experto, subiendo los CSV o a mano. Cada CSV lleva las etiquetas en
+        la primera fila y la primera columna; se acepta separador <span className="mono">,</span> o{' '}
+        <span className="mono">;</span> y decimal con punto o coma. Los efectos olvidados se calculan con{' '}
+        <span className="mono">forgeffects</span> en el cluster.
       </p>
       <form className="grid" onSubmit={onSubmit} noValidate>
-        <div className="grid-3">
+        <div className="controls" role="tablist" aria-label="Forma de ingreso" style={{ marginBottom: 0 }}>
+          <button type="button" role="tab" aria-selected={mode === 'csv'} className={mode === 'csv' ? 'primary' : undefined} onClick={() => setMode('csv')}>Subir CSV</button>
+          <button type="button" role="tab" aria-selected={mode === 'manual'} className={mode === 'manual' ? 'primary' : undefined} onClick={() => setMode('manual')}>Ingresar a mano</button>
+        </div>
+
+        {mode === 'manual' && <ManualMatrices onChange={setManualTexts} errors={validation?.errors} />}
+
+        {mode === 'csv' && <div className="grid-3">
           {MATRICES.map((m) => (
             <div className="field" key={m.key}>
               <label htmlFor={`file-${m.key}`}>{m.name} <span className="muted">({m.shape})</span></label>
@@ -177,7 +191,7 @@ export default function FeExecute() {
               <div className="hint">{fileNames[m.key] || m.hint}</div>
             </div>
           ))}
-        </div>
+        </div>}
 
         {validating && <div className="small muted">Validando…</div>}
         {validation && (
@@ -205,11 +219,19 @@ export default function FeExecute() {
                 ))}
               </ul>
             )}
-            {cellErrorCount > 0 && (
+            {cellErrorCount > 0 && mode === 'csv' && (
               <div className="small" style={{ color: 'var(--err)' }}>
                 {cellErrorCount} celdas con errores (marcadas en rojo; pasa el cursor para ver el motivo).
               </div>
             )}
+            {cellErrorCount > 0 && mode === 'manual' && (
+              <div className="small" style={{ color: 'var(--err)' }}>
+                {emptyCount > 0 && `${emptyCount} celdas vacías (en amarillo)`}
+                {emptyCount > 0 && cellErrorCount > emptyCount && ' · '}
+                {cellErrorCount > emptyCount && `${cellErrorCount - emptyCount} con valores inválidos (en rojo)`}
+              </div>
+            )}
+            {mode === 'csv' && <>
             <div className="controls" style={{ marginTop: 10 }}>
               {MATRICES.map((m) => {
                 const n = validation.errors.filter((e) => e.matrix === m.name).length;
@@ -221,6 +243,7 @@ export default function FeExecute() {
               })}
             </div>
             <Preview name={tab} preview={validation.previews[tab]} errors={tabErrors} />
+            </>}
           </div>
         )}
 
