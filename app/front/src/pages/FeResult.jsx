@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiFetch } from '../api.js';
+import PathsSankey from '../components/PathsSankey.jsx';
 
 const POLL_MS = 3000;
 const PAGE_SIZE = 200;
@@ -9,27 +10,47 @@ function fmtNumber(v) {
   return typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(4) : v;
 }
 
-function PathsTable({ jobId, table }) {
+const TOP_OPTIONS = [25, 50, 100, 200];
+
+function OrderView({ jobId, table, causes }) {
   const [origin, setOrigin] = useState('');
+  const [top, setTop] = useState(50);
+  const metrics = ['Mean', 'Count'].filter((m) => table.columns.includes(m));
+  const [metric, setMetric] = useState(metrics[0] || 'Mean');
   const [limit, setLimit] = useState(PAGE_SIZE);
   const origins = useMemo(() => [...new Set(table.rows.map((r) => r[0]))].sort(), [table]);
+  const metricIdx = table.columns.indexOf(metric);
   const meanIdx = table.columns.indexOf('Mean');
+  // Filtros compartidos: el Sankey y la tabla muestran siempre el mismo subconjunto.
   const rows = useMemo(() => {
     const filtered = origin ? table.rows.filter((r) => r[0] === origin) : table.rows;
-    return meanIdx >= 0 ? [...filtered].sort((a, b) => b[meanIdx] - a[meanIdx]) : filtered;
-  }, [table, origin, meanIdx]);
+    return metricIdx >= 0 ? [...filtered].sort((a, b) => b[metricIdx] - a[metricIdx]) : filtered;
+  }, [table, origin, metricIdx]);
+  const sankeyRows = useMemo(() => (top ? rows.slice(0, top) : rows), [rows, top]);
 
   return (
     <div>
       <div className="controls">
-        <select value={origin} onChange={(e) => { setOrigin(e.target.value); setLimit(PAGE_SIZE); }}>
+        <select value={origin} onChange={(e) => { setOrigin(e.target.value); setLimit(PAGE_SIZE); }} aria-label="Origen">
           <option value="">Todos los orígenes</option>
           {origins.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
-        <span className="small muted">{rows.length} caminos</span>
+        <select value={top} onChange={(e) => setTop(Number(e.target.value))} aria-label="Caminos en el Sankey">
+          {TOP_OPTIONS.map((n) => <option key={n} value={n}>Sankey: top {n}</option>)}
+          <option value={0}>Sankey: todos</option>
+        </select>
+        {metrics.length > 1 && (
+          <select value={metric} onChange={(e) => setMetric(e.target.value)} aria-label="Ancho de los enlaces">
+            {metrics.map((m) => <option key={m} value={m}>Ancho: {m}</option>)}
+          </select>
+        )}
+        <span className="small muted">
+          {rows.length} caminos{top && rows.length > top ? ` · Sankey con los ${top} de mayor ${metric}` : ''}
+        </span>
         <a className="btn" href={`/app/fe/jobs/${jobId}/paths_order_${table.order}.csv`}>Descargar CSV</a>
       </div>
-      <div style={{ overflow: 'auto' }}>
+      <PathsSankey columns={table.columns} rows={sankeyRows} metric={metric} causes={causes} />
+      <div style={{ overflow: 'auto', marginTop: 16 }}>
         <table>
           <thead>
             <tr>{table.columns.map((c) => <th key={c}>{c}</th>)}</tr>
@@ -119,7 +140,7 @@ export default function FeResult() {
   const table = paths?.tables.find((t) => t.order === order);
 
   return (
-    <div className="grid" style={{ display: 'grid', gap: 20 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 20 }}>
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
           <h1>Caminos · job <span className="mono">{job.job_id}</span></h1>
@@ -166,7 +187,7 @@ export default function FeResult() {
                   </button>
                 ))}
               </div>
-              {table && <PathsTable key={table.order} jobId={job.job_id} table={table} />}
+              {table && <OrderView key={table.order} jobId={job.job_id} table={table} causes={paths.causes} />}
             </>
           )}
         </div>

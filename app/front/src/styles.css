@@ -88,3 +88,16 @@ td.cell-err{background:#fee2e2;color:var(--err);font-weight:600}
 tr.row-err th{background:#fee2e2;color:var(--err)}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;font-size:13px;margin-top:10px}
 .kv>span:nth-child(odd){color:var(--muted)}
+
+/* sankey de caminos (colores validados: azul/naranja, contraste >= 3:1 sobre blanco) */
+.sankey{--viz-cause:#2a78d6;--viz-effect:#eb6834;--viz-link:#9ca3af;position:relative;margin-top:4px}
+.sankey-scroll{overflow-x:auto}
+.sankey-scroll svg{display:block}
+.sankey-legend{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:8px;color:var(--text)}
+.sankey-legend span{display:inline-flex;gap:6px;align-items:center}
+.sankey-col{font-size:11px;letter-spacing:.05em;text-transform:uppercase;fill:var(--muted)}
+.sankey-label{font-size:12px;fill:var(--text);paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none}
+.sankey-node{cursor:default;outline:none}
+.sankey-node:focus-visible rect:last-of-type{stroke:var(--text);stroke-width:1.5px}
+.sankey-tip{position:absolute;pointer-events:none;background:#fff;border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);max-width:220px;z-index:2}
+.sankey-tip strong{font-size:13px}
