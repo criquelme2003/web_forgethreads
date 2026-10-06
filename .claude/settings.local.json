@@ -1,0 +1,59 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest)",
+      "Bash(uv run pytest *)",
+      "Bash(uv run ruff *)",
+      "Bash(uv sync *)",
+      "Bash(npm ci --prefix app/front)",
+      "Bash(npm run build --prefix app/front)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env_deploy)",
+      "Edit(./.env)",
+      "Edit(./.env_deploy)",
+      "Edit(./data/jobs.db)",
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(sbatch *)",
+      "Bash(kubectl apply *)",
+      "Bash(kubectl delete *)",
+      "Bash(gh pr create)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-ruff.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-pytest.sh",
+            "timeout": 180,
+            "statusMessage": "Corriendo pytest..."
+          }
+        ]
+      }
+    ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "includeCoAuthoredBy": false
+}
