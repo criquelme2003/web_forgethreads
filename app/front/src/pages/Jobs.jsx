@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { apiFetch, apiJson } from '../api.js';
 
 function fmt(iso) {
@@ -10,10 +11,13 @@ function fmt(iso) {
 }
 
 function badgeClass(s) {
-  return s === 'pending' ? 'pending' : s === 'success' ? 'success' : 'error';
+  return ['pending', 'success', 'partial'].includes(s) ? s : 'error';
 }
 
+const KIND_LABELS = { maxmin: 'MaxMin', fe: 'Caminos' };
+
 export default function Jobs() {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [auto, setAuto] = useState(true);
@@ -68,6 +72,7 @@ export default function Jobs() {
           <option value="pending">Pendientes</option>
           <option value="">Todos</option>
           <option value="success">Completados</option>
+          <option value="partial">Parcial</option>
           <option value="error">Error</option>
         </select>
         <button id="refresh" onClick={() => fetchJobs(filter)}>Actualizar</button>
@@ -79,22 +84,23 @@ export default function Jobs() {
       <div style={{ overflow: 'auto' }}>
         <table>
           <thead>
-            <tr><th>Job ID</th><th>Estado</th><th>Nodo</th><th>Creado</th><th>Orden</th><th>Tiempo(s)</th></tr>
+            <tr><th>Job ID</th><th>Tipo</th><th>Estado</th><th>Nodo</th><th>Creado</th><th>Orden</th><th>Tiempo(s)</th></tr>
           </thead>
           <tbody id="tbody">
             {jobs === null && (
-              <tr><td colSpan="6" className="empty">Cargando…</td></tr>
+              <tr><td colSpan="7" className="empty">Cargando…</td></tr>
             )}
             {jobs !== null && jobs.length === 0 && (
-              <tr><td colSpan="6" className="empty">Sin trabajos {emptyLabel}</td></tr>
+              <tr><td colSpan="7" className="empty">Sin trabajos {emptyLabel}</td></tr>
             )}
             {jobs !== null && jobs.map((j) => (
-              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => showDetail(j.job_id)}>
+              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => (j.kind === 'fe' ? navigate(`/fe/jobs/${j.job_id}`) : showDetail(j.job_id))}>
                 <td className="mono">{j.job_id}</td>
+                <td>{KIND_LABELS[j.kind] || j.kind}</td>
                 <td><span className={`badge ${badgeClass(j.status)}`}>{j.status}</span></td>
                 <td>{j.node}</td>
                 <td className="small">{fmt(j.created_at)}</td>
-                <td>{j.effective_order ?? '—'}</td>
+                <td>{j.kind === 'fe' ? (j.result?.orders?.length ? Math.max(...j.result.orders) : '—') : (j.effective_order ?? '—')}</td>
                 <td>{j.computation_time_s != null ? j.computation_time_s.toFixed(2) : '—'}</td>
               </tr>
             ))}

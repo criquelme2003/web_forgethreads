@@ -1,4 +1,5 @@
 import asyncio
+import json
 import secrets
 import sqlite3
 from dataclasses import dataclass, field
@@ -6,7 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-JobStatus = Literal["pending", "success", "error"]
+JobStatus = Literal["pending", "success", "error", "partial"]
+JobKind = Literal["maxmin", "fe"]
 
 
 class JobNotFoundError(Exception):
@@ -24,6 +26,59 @@ class JobRecord:
     effective_order: int | None = None
     computation_time_s: float | None = None
     logs: str | None = None
+    kind: JobKind = "maxmin"
+    params: dict | None = None  # parámetros con que se lanzó el job
+    result: dict | None = None  # resumen que reporta el notifier (ej. orders/rows_per_order de fe_job)
+
+
+_COLUMNS = (
+    "job_id, status, node, token, effective_order, computation_time_s, logs, "
+    "created_at, updated_at, kind, params, result"
+)
+# Columnas agregadas después de la versión inicial de la tabla: se crean si faltan.
+_ADDED_COLUMNS = {
+    "kind": "TEXT NOT NULL DEFAULT 'maxmin'",
+    "params": "TEXT",
+    "result": "TEXT",
+}
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Crea la tabla si no existe y agrega las columnas nuevas a bases antiguas (idempotente)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS jobs (
+            job_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            node TEXT NOT NULL,
+            token TEXT NOT NULL,
+            effective_order INTEGER,
+            computation_time_s REAL,
+            logs TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for column, ddl in _ADDED_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {ddl}")
+    conn.commit()
+
+
+def _dump(value: dict | None) -> str | None:
+    return None if value is None else json.dumps(value, ensure_ascii=False)
+
+
+def _load(value: str | None) -> dict | None:
+    if not value:
+        return None
+    try:
+        data = json.loads(value)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _parse_dt(s: str) -> datetime:
@@ -72,22 +127,7 @@ class JobStore:
         else:
             conn = sqlite3.connect(uri_path, check_same_thread=False)
         try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    job_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    node TEXT NOT NULL,
-                    token TEXT NOT NULL,
-                    effective_order INTEGER,
-                    computation_time_s REAL,
-                    logs TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.commit()
+            _ensure_schema(conn)
         finally:
             conn.close()
 
@@ -102,22 +142,7 @@ class JobStore:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        # crea tabla si no existe (idempotente)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS jobs (
-                job_id TEXT PRIMARY KEY,
-                status TEXT NOT NULL,
-                node TEXT NOT NULL,
-                token TEXT NOT NULL,
-                effective_order INTEGER,
-                computation_time_s REAL,
-                logs TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
+        _ensure_schema(conn)
         return conn
 
     @staticmethod
@@ -132,29 +157,44 @@ class JobStore:
             logs=row["logs"],
             created_at=_parse_dt(row["created_at"]),
             updated_at=_parse_dt(row["updated_at"]),
+            kind=row["kind"],  # type: ignore
+            params=_load(row["params"]),
+            result=_load(row["result"]),
         )
 
-    async def create(self, job_id: str, node: str) -> JobRecord:
+    @staticmethod
+    def _record_values(record: JobRecord) -> tuple:
+        return (
+            record.job_id,
+            record.status,
+            record.node,
+            record.token,
+            record.effective_order,
+            record.computation_time_s,
+            record.logs,
+            record.created_at.isoformat(),
+            record.updated_at.isoformat(),
+            record.kind,
+            _dump(record.params),
+            _dump(record.result),
+        )
+
+    async def create(
+        self, job_id: str, node: str, kind: JobKind = "maxmin", params: dict | None = None
+    ) -> JobRecord:
         """Crea el registro del job con un token propio (usado como --auth-token del notifier)."""
         now = datetime.now(UTC)
         token = secrets.token_urlsafe(32)
-        record = JobRecord(job_id=job_id, status="pending", node=node, created_at=now, updated_at=now, token=token)
+        record = JobRecord(
+            job_id=job_id, status="pending", node=node, created_at=now, updated_at=now, token=token,
+            kind=kind, params=params,
+        )
         async with self._lock:
             conn = self._connect()
             try:
                 conn.execute(
-                    "INSERT OR REPLACE INTO jobs (job_id, status, node, token, effective_order, computation_time_s, logs, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (
-                        record.job_id,
-                        record.status,
-                        record.node,
-                        record.token,
-                        record.effective_order,
-                        record.computation_time_s,
-                        record.logs,
-                        record.created_at.isoformat(),
-                        record.updated_at.isoformat(),
-                    ),
+                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    self._record_values(record),
                 )
                 conn.commit()
             finally:
@@ -183,24 +223,18 @@ class JobStore:
         async with self._lock:
             conn = self._connect()
             try:
-                cur = conn.execute("SELECT token, created_at FROM jobs WHERE job_id=?", (job_id,))
+                cur = conn.execute(
+                    "SELECT token, created_at, kind, params FROM jobs WHERE job_id=?", (job_id,)
+                )
                 existing = cur.fetchone()
                 if existing:
                     record.token = existing["token"]
                     record.created_at = _parse_dt(existing["created_at"])
+                    record.kind = existing["kind"]
+                    record.params = _load(existing["params"])
                 conn.execute(
-                    "INSERT OR REPLACE INTO jobs (job_id, status, node, token, effective_order, computation_time_s, logs, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (
-                        record.job_id,
-                        record.status,
-                        record.node,
-                        record.token,
-                        record.effective_order,
-                        record.computation_time_s,
-                        record.logs,
-                        record.created_at.isoformat(),
-                        record.updated_at.isoformat(),
-                    ),
+                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    self._record_values(record),
                 )
                 conn.commit()
             finally:
@@ -214,6 +248,7 @@ class JobStore:
         effective_order: int | None = None,
         computation_time_s: float | None = None,
         logs: str | None = None,
+        result: dict | None = None,
     ) -> JobRecord:
         async with self._lock:
             conn = self._connect()
@@ -225,8 +260,12 @@ class JobStore:
                 # actualiza
                 now = datetime.now(UTC)
                 conn.execute(
-                    "UPDATE jobs SET status=?, effective_order=?, computation_time_s=?, logs=?, updated_at=? WHERE job_id=?",
-                    (status, effective_order, computation_time_s, logs, now.isoformat(), job_id),
+                    "UPDATE jobs SET status=?, effective_order=?, computation_time_s=?, logs=?, "
+                    "result=?, updated_at=? WHERE job_id=?",
+                    (
+                        status, effective_order, computation_time_s, logs, _dump(result),
+                        now.isoformat(), job_id,
+                    ),
                 )
                 conn.commit()
                 cur = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,))
