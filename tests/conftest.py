@@ -1,8 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.deps import get_job_store
 from app.core.config import Settings, get_settings
 from app.main import app
+from app.services.job_store import JobStore
 
 TEST_USERNAME = "testadmin"
 TEST_PASSWORD = "testpass"
@@ -48,8 +50,11 @@ def _override_settings() -> Settings:
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(tmp_path) -> TestClient:
     app.dependency_overrides[get_settings] = _override_settings
+    # Base temporal: los tests no deben tocar data/jobs.db
+    store = JobStore(str(tmp_path / "jobs.db"))
+    app.dependency_overrides[get_job_store] = lambda: store
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

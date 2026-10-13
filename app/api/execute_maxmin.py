@@ -5,17 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.api.deps import get_job_store, get_node_selector, get_ssh_pool, require_user
+from app.api.launch import launch_with_notifier, resolve_node
 from app.core.config import Settings, get_settings
 from app.services.job_store import JobStore
-from app.services.node_selector import NodeSelector, NoAvailableNodeError
-from app.services.slurm_submit import (
-    JobIdParseError,
-    build_new_job_command,
-    build_notifier_command,
-    parse_job_id,
-    redact_token,
-)
-from app.ssh.pool import SSHConnectionPool
+from app.services.slurm_submit import build_new_job_command
 
 logger = logging.getLogger(__name__)
 
@@ -64,23 +57,6 @@ def _normalize_payload(payload: dict) -> dict:
     return normalized
 
 
-async def _resolve_node(nodo: str | None, pool: SSHConnectionPool, selector: NodeSelector) -> str:
-    if nodo is None:
-        try:
-            best = await selector.select_best()
-        except NoAvailableNodeError as e:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"No hay nodos disponibles: {e}")
-        return best.name
-
-    if nodo not in pool.node_names:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Nodo desconocido: {nodo}")
-    statuses = await selector.get_all_status()
-    is_available = any(s.name == nodo and s.is_available for s in statuses)
-    if not is_available:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Nodo no disponible: {nodo}")
-    return nodo
-
-
 @router.post("/app/execute_maxmin", response_model=ExecuteMaxMinAckResponse)
 async def execute_maxmin(
     payload: dict,
@@ -91,7 +67,7 @@ async def execute_maxmin(
 ):
     """
     Encola un cómputo MaxMin: elige nodo, lanza new_job.sh en SLURM y encadena
-    notifier.sh (afterok) para que reporte el resultado a /app/job_callback.
+    notifier.sh (afterany) para que reporte el resultado a /app/job_callback.
     """
     normalized = _normalize_payload(payload)
     try:
@@ -101,7 +77,7 @@ async def execute_maxmin(
 
     selector = get_node_selector(request)
     pool = get_ssh_pool(request)
-    nodo = await _resolve_node(data.nodo, pool, selector)
+    nodo = await resolve_node(data.nodo, pool, selector)
 
     new_job_cmd = build_new_job_command(
         scripts_wf_dir=settings.scripts_wf_dir,
@@ -110,43 +86,15 @@ async def execute_maxmin(
         conectividad_promedio=data.conectividad_promedio,
         seed=data.seed,
     )
-    logger.info("Lanzando new_job en %s: %s", nodo, new_job_cmd)
-    result = await pool.run_on_node(nodo, new_job_cmd)
-    if result is None or result.exit_status != 0:
-        logger.warning("new_job.sh falló en %s", nodo)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"No se pudo lanzar new_job.sh en nodo {nodo}")
-
-    try:
-        job_id = parse_job_id(str(result.stdout))
-    except JobIdParseError as e:
-        logger.warning("No se pudo parsear JOBID en %s: %s", nodo, e)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "No se pudo determinar el JOBID de new_job.sh")
-
-    # El token se genera recién aquí (JobStore.create) y se pasa a notifier.sh, que es
-    # el único script que llama a /app/job_callback y por tanto el único que lo necesita.
-    record = await store.create(job_id, node=nodo)
-
-    callback_url = f"{settings.public_callback_base_url}/app/job_callback"
-    notifier_cmd = build_notifier_command(
-        scripts_wf_dir=settings.scripts_wf_dir,
-        job_id=job_id,
-        auth_token=record.token,
-        callback_url=callback_url,
+    job_id = await launch_with_notifier(
+        pool=pool,
+        store=store,
+        settings=settings,
+        node=nodo,
+        command=new_job_cmd,
+        script="new_job.sh",
+        kind="maxmin",
+        params=data.model_dump(exclude={"nodo"}),
     )
-    logger.info("Lanzando notifier en %s: %s", nodo, redact_token(notifier_cmd, record.token))
-    notifier_result = await pool.run_on_node(nodo, notifier_cmd)
-    if notifier_result is None or notifier_result.exit_status != 0:
-        logger.warning(
-            "notifier.sh falló en %s para job %s; new_job puede seguir corriendo sin notificar", nodo, job_id
-        )
-        await store.mark_error(
-            job_id,
-            node=nodo,
-            logs=f"No se pudo encadenar notifier.sh: el job {job_id} puede seguir corriendo en SLURM sin notificación",
-        )
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            f"new_job {job_id} se encoló pero no se pudo lanzar notifier.sh",
-        )
 
     return ExecuteMaxMinAckResponse(job_id=job_id, status="pending")

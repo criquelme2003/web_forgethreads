@@ -72,3 +72,44 @@ tr:hover td{background:#f9fafb}
 .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#f3f4f6;border:1px solid var(--border);font-size:11px;color:var(--muted)}
 pre.output{background:#111827;color:#e5e7eb;border:1px solid #1f2937;padding:14px;border-radius:6px;overflow:auto;font-size:12.5px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 .checkbox-label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+
+/* cálculo de caminos */
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:720px){.grid-3{grid-template-columns:1fr}}
+.badge.partial{background:#e0e7ff;color:#3730a3;border:1px solid #a5b4fc}
+.validation{border:1px solid var(--border);border-radius:var(--radius);padding:14px;background:#f9fafb}
+.notes{margin:8px 0 0;padding-left:18px;color:var(--muted)}
+.notes.err{color:var(--err)}
+.matrix-wrap{overflow:auto;max-height:420px;background:#fff;border:1px solid var(--border);border-radius:6px}
+table.matrix th,table.matrix td{padding:4px 8px;white-space:nowrap}
+table.matrix tbody th{background:#f9fafb;text-transform:none;letter-spacing:0;color:var(--text)}
+table.matrix thead th{text-transform:none;letter-spacing:0;color:var(--text)}
+td.cell-err{background:#fee2e2;color:var(--err);font-weight:600}
+tr.row-err th{background:#fee2e2;color:var(--err)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;font-size:13px;margin-top:10px}
+.kv>span:nth-child(odd){color:var(--muted)}
+
+/* sankey de caminos (colores validados: azul/naranja, contraste >= 3:1 sobre blanco) */
+.sankey{--viz-cause:#2a78d6;--viz-effect:#eb6834;--viz-link:#9ca3af;position:relative;margin-top:4px}
+.sankey-scroll{overflow-x:auto}
+.sankey-scroll svg{display:block}
+.sankey-legend{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:8px;color:var(--text)}
+.sankey-legend span{display:inline-flex;gap:6px;align-items:center}
+.sankey-col{font-size:11px;letter-spacing:.05em;text-transform:uppercase;fill:var(--muted)}
+.sankey-label{font-size:12px;fill:var(--text);paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none}
+.sankey-node{cursor:default;outline:none}
+.sankey-node:focus-visible rect:last-of-type{stroke:var(--text);stroke-width:1.5px}
+.sankey-tip{position:absolute;pointer-events:none;background:#fff;border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);max-width:220px;z-index:2}
+.sankey-tip strong{font-size:13px}
+
+/* ingreso manual de matrices */
+.manual{display:grid;gap:16px}
+.field textarea{width:100%;padding:10px 11px;border:1px solid #d1d5db;border-radius:6px;font:inherit;font-size:14px;resize:vertical;outline:none}
+.field textarea:focus{border-color:#3b82f6;box-shadow:0 0 0 3px var(--ring)}
+.manual-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+table.matrix td:has(.cell-input){padding:2px}
+.cell-input{width:64px;padding:5px 6px;border:1px solid #d1d5db;border-radius:4px;font:12px ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;text-align:right;background:#fff;color:var(--text)}
+.cell-input:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 2px var(--ring)}
+.cell-input:disabled{background:#f3f4f6;color:var(--muted);border-color:var(--border)}
+.cell-input.cell-empty{background:#fffbeb;border-color:#fcd34d}
+td.cell-err .cell-input{background:#fee2e2;border-color:#fca5a5;color:var(--err)}

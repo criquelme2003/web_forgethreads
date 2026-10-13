@@ -13,3 +13,6 @@ tasks
 # Frontend (Vite + React): se genera con `npm run build` en app/front
 app/front/node_modules/
 app/front/dist/
+
+# Caché de resultados descargados del cluster
+data/fe_results/

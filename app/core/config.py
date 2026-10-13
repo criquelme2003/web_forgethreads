@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     session_max_age_seconds: int = 15 * 24 * 60 * 60  # debe coincidir con SessionMiddleware(max_age=...)
     session_idle_timeout_seconds: int = 24 * 60 * 60  # inactividad máxima antes de expirar la sesión (sliding window)
     jobs_db_path: str = "data/jobs.db"  # sqlite para persistencia de cola
+    fe_results_dir: str = "data/fe_results"  # caché local de los CSV de caminos descargados de fe_job
 
     @property
     def session_cookie_secure(self) -> bool:

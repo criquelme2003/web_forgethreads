@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 const LINKS = [
   { to: '/parameters', label: 'Encolar' },
+  { to: '/fe', label: 'Caminos' },
   { to: '/jobs', label: 'Trabajos' },
   { to: '/gpu_status', label: 'GPU' },
   { to: '/cluster_status', label: 'Cluster' },
@@ -13,11 +14,12 @@ const SECTIONS = {
   '/jobs': 'Trabajos',
   '/gpu_status': 'GPU',
   '/cluster_status': 'Cluster',
+  '/fe': 'Caminos',
 };
 
 export default function Layout() {
   const { pathname } = useLocation();
-  const section = SECTIONS[pathname] || '';
+  const section = SECTIONS[pathname] || (pathname.startsWith('/fe/') ? 'Caminos' : '');
   return (
     <>
       <header className="topbar">
