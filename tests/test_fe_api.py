@@ -43,11 +43,11 @@ class FakePool:
 
 
 class FakeSelector:
-    async def select_best(self) -> _Node:
-        return _Node("cuda1")
-
-    async def get_all_status(self) -> list[_Node]:
+    async def get_all_status(self, force_refresh: bool = False) -> list[_Node]:
         return [_Node("cuda1")]
+
+    async def ranked_candidates(self, force_refresh: bool = True, gpu_idle_threshold: int = 5):
+        return [_Node("cuda1")], [_Node("cuda1")]
 
 
 @pytest.fixture
@@ -80,6 +80,7 @@ def env(tmp_path: Path, monkeypatch):
         auth_password=TEST_PASSWORD,
         session_secret_key="test-secret-key-0123456789",
         public_callback_base_url="http://testserver",
+        submit_check_delay_s=0,
         fe_results_dir=str(tmp_path / "fe_results"),
     )
     app.dependency_overrides[get_settings] = lambda: settings
@@ -141,7 +142,7 @@ def test_execute_uploads_and_chains_notifier(env) -> None:
     assert res.json()["job_id"] == JOB_ID
     request_id = env["uploads"]["request_id"]
     assert set(env["uploads"]["files"]) == {"CC.npy", "CE.npy", "EE.npy", "meta.json"}
-    fe_cmd, notifier_cmd = env["pool"].commands
+    fe_cmd, notifier_cmd = [c for c in env["pool"].commands if "sbatch" in c]
     assert f"sbatch fe_job.sh --input-dir jobs_inputs/{request_id}" in fe_cmd
     assert f"--dependency=afterany:{JOB_ID} notifier.sh" in notifier_cmd
 

@@ -25,7 +25,7 @@ uv run uvicorn app.main:app --reload            # servidor local
 
 ### Flujo de un job
 
-1. `POST /app/execute_maxmin` valida, resuelve nodo y corre `sbatch new_job.sh` por SSH → parsea JOBID.
+1. `POST /app/execute_maxmin` valida y llama a `submit_with_failover` (`app/api/launch.py`): consulta los nodos sin caché (`NodeSelector.ranked_candidates`; los flags `+DRAIN`, `+NOT_RESPONDING`, `*`, etc. dejan el nodo no disponible), corre `sbatch new_job.sh`, parsea el JOBID y revisa con `squeue` que no quedó bloqueado (`ReqNodeNotAvail`…). Si falla o quedó bloqueado, lo cancela y prueba el siguiente nodo (RF-46). Con `nodo` explícito no hay failover.
 2. `JobStore.create` genera un token por job.
 3. Se encadena `sbatch --dependency=afterany:<id> notifier.sh` con ese token (corre aunque el job falle).
 4. `notifier.sh` llama a `POST /app/job_callback` con `Authorization: Bearer <token>` → se actualiza el registro.

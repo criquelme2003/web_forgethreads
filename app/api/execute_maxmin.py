@@ -11,7 +11,7 @@ from app.api.deps import (
     get_ssh_pool,
     require_user,
 )
-from app.api.launch import launch_with_notifier, resolve_node
+from app.api.launch import submit_with_failover
 from app.core.config import Settings, get_settings
 from app.services.job_store import JobStore
 from app.services.node_selector import NodeSelector
@@ -100,8 +100,6 @@ async def execute_maxmin(
     if project.estado != "abierto":
         raise HTTPException(status.HTTP_409_CONFLICT, f"El proyecto está {project.estado}")
 
-    nodo = await resolve_node(data.nodo, pool, selector)
-
     new_job_cmd = build_new_job_command(
         scripts_wf_dir=settings.scripts_wf_dir,
         numero_nodos=data.numero_nodos,
@@ -109,12 +107,17 @@ async def execute_maxmin(
         conectividad_promedio=data.conectividad_promedio,
         seed=data.seed,
     )
-    job_id = await launch_with_notifier(
+
+    async def prepare(node: str) -> str:
+        return new_job_cmd
+
+    job_id, _ = await submit_with_failover(
+        nodo=data.nodo,
         pool=pool,
+        selector=selector,
         store=store,
         settings=settings,
-        node=nodo,
-        command=new_job_cmd,
+        prepare=prepare,
         script="new_job.sh",
         kind="maxmin",
         params=data.model_dump(exclude={"nodo", "project_id"}),

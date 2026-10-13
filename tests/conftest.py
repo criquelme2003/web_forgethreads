@@ -47,6 +47,7 @@ def _override_settings() -> Settings:
         cuda3_username="test_user",
         cuda3_ip="192.192.192",
         public_callback_base_url="http://testserver",
+        submit_check_delay_s=0,
     )
 
 

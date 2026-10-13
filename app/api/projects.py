@@ -21,7 +21,6 @@ from app.api.deps import (
 )
 from app.api.fe import launch_fe_job
 from app.api.job_callback import JobStatusResponse
-from app.api.launch import resolve_node
 from app.core.config import Settings, get_settings
 from app.services.fe_input import MAX_LABELS
 from app.services.job_store import JobRecord, JobStore
@@ -290,13 +289,11 @@ async def launch_expert_computation(
 ) -> tuple[str, str]:
     """Lanza forgeffects sobre el input de un experto (RF-21). Lanza HTTPException si falla."""
     cc, ce, ee = input_matrices(item)
-    node = await resolve_node(nodo, pool, selector)
-    job_id = await launch_fe_job(
-        pool=pool, store=store, settings=settings, node=node, cc=cc, ce=ce, ee=ee,
+    return await launch_fe_job(
+        pool=pool, store=store, selector=selector, settings=settings, nodo=nodo, cc=cc, ce=ce, ee=ee,
         causes=project.causas, effects=project.efectos, thr=thr, maxorder=maxorder,
         project_id=project.id, input_id=item.id,
     )
-    return job_id, node
 
 
 # --- proyectos -------------------------------------------------------------------------------

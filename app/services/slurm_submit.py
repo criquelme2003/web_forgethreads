@@ -59,3 +59,49 @@ def redact_token(command: str, auth_token: str) -> str:
     if not auth_token:
         return command
     return command.replace(auth_token, "***")
+
+
+# Motivos de PENDING que no se resuelven solos (requerimientos §6.1): el job no correrá en este
+# nodo. squeue puede mostrar el código ("ReqNodeNotAvail, UnavailableNodes:cuda1") o la
+# descripción larga ("Nodes required for job are DOWN, DRAINED or reserved ...").
+BLOCKING_REASONS = (
+    "ReqNodeNotAvail",
+    "Nodes required for job are DOWN",
+    "NodeDown",
+    "PartitionDown",
+    "PartitionInactive",
+    "PartitionConfig",
+    "BadConstraints",
+    "JobHeldUser",
+    "JobHeldAdmin",
+    "launch failed requeued held",
+    "DependencyNeverSatisfied",
+)
+
+
+def build_job_state_command(job_id: str) -> str:
+    """Estado y motivo de un job: 'PENDING|ReqNodeNotAvail, UnavailableNodes:cuda1'."""
+    return f"squeue -h -j {shlex.quote(job_id)} -o '%T|%r'"
+
+
+def build_scancel_command(*job_ids: str) -> str:
+    return "scancel " + " ".join(shlex.quote(j) for j in job_ids)
+
+
+def parse_job_state(stdout: str) -> tuple[str, str] | None:
+    """(estado, motivo) de la primera línea de squeue; None si el job no aparece."""
+    for line in (stdout or "").splitlines():
+        if "|" in line:
+            state, _, reason = line.strip().partition("|")
+            return state.strip(), reason.strip()
+    return None
+
+
+def blocking_reason(state: str, reason: str) -> str | None:
+    """Devuelve el motivo si el job quedó PENDING por algo que no se resuelve solo."""
+    if state.upper() != "PENDING":
+        return None
+    lowered = reason.lower()
+    if any(r.lower() in lowered for r in BLOCKING_REASONS):
+        return reason
+    return None

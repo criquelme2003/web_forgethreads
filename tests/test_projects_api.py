@@ -62,11 +62,11 @@ class FakePool:
 
 
 class FakeSelector:
-    async def select_best(self) -> _Node:
-        return _Node("cuda1")
-
-    async def get_all_status(self) -> list[_Node]:
+    async def get_all_status(self, force_refresh: bool = False) -> list[_Node]:
         return [_Node("cuda1")]
+
+    async def ranked_candidates(self, force_refresh: bool = True, gpu_idle_threshold: int = 5):
+        return [_Node("cuda1")], [_Node("cuda1")]
 
 
 def _settings(tmp_path: Path, **overrides) -> Settings:
@@ -75,6 +75,7 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
         auth_password=TEST_PASSWORD,
         session_secret_key="test-secret-key-0123456789",
         public_callback_base_url="http://testserver",
+        submit_check_delay_s=0,
         fe_results_dir=str(tmp_path / "fe_results"),
         **overrides,
     )

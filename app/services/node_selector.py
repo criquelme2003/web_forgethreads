@@ -181,6 +181,28 @@ class NodeSelector:
         logger.info("Selected node %s score=%.1f gpu_free=%d cpu_free=%.2f state=%s", best.name, self.score(best), best.gpus_free, best.cpu_free_ratio, best.state.value)
         return best
 
+    async def ranked_candidates(
+        self, force_refresh: bool = True, gpu_idle_threshold: int = 5
+    ) -> tuple[list[NodeStatus], list[NodeStatus]]:
+        """Nodos disponibles ordenados para el failover al enviar un job (RF-46).
+
+        Consulta el estado sin caché por defecto. Primero van los nodos con alguna GPU en idle y
+        luego el resto, cada grupo por score. Devuelve (candidatos, todos los estados) para que
+        el llamador pueda explicar por qué no hay candidatos.
+        """
+        statuses = await self.get_all_status(force_refresh=force_refresh)
+        available = [s for s in statuses if s.is_available and self.score(s) >= 0]
+        enriched = await asyncio.gather(
+            *[self._check_idle_for_status(s, threshold=gpu_idle_threshold) for s in available]
+        )
+        ranked = sorted(
+            enriched,
+            key=lambda s: (bool(s.has_idle_gpu), self.score(s), s.gpus_free, s.cpu_free_ratio, -s.pending_jobs),
+            reverse=True,
+        )
+        logger.info("Candidatos para enviar: %s", [(s.name, s.state.value, s.has_idle_gpu) for s in ranked])
+        return ranked, statuses
+
     # --- GPU idle: forma sencilla de priorizar nodo con GPU en idle ---
     async def _check_idle_for_status(self, status: NodeStatus, threshold: int = 5) -> NodeStatus:
         """Consulta nvidia-smi en el nodo y rellena has_idle_gpu/gpu_utils. Retorna status enrichado."""

@@ -12,6 +12,30 @@ logger = logging.getLogger(__name__)
 # Regex para scontrol show node
 _RE_KV = re.compile(r"(\w+)=([^\s]+)")
 _RE_GRES_GPU = re.compile(r"gpu(?::[^:,\s]+)?:(\d+)", re.IGNORECASE)
+_RE_REASON = re.compile(r"\bReason=(.*?)(?=\s+\w+=|$)")
+
+# Flags de State (scontrol) que impiden que el nodo corra jobs nuevos, aunque el estado base
+# sea IDLE o MIXED. Ej.: "IDLE+DRAIN", "MIXED+DRAIN", "IDLE+NOT_RESPONDING".
+_DOWN_FLAGS = {
+    "DOWN", "FAIL", "FAILING", "NOT_RESPONDING", "NO_RESPOND", "POWERED_DOWN", "POWER_DOWN",
+    "POWERING_DOWN", "REBOOT_ISSUED", "INVALID", "INVALID_REG",
+}
+_DRAIN_FLAGS = {"DRAIN", "DRAINED", "DRAINING", "MAINT", "MAINTENANCE", "RESERVED"}
+
+
+def parse_node_state(state_raw: str) -> tuple[NodeState, tuple[str, ...]]:
+    """Estado efectivo de un nodo a partir del State= de scontrol, considerando sus flags.
+
+    "IDLE+DRAIN" -> DRAIN; "MIXED+NOT_RESPONDING" o "IDLE*" -> DOWN; "MIXED" -> MIX.
+    """
+    tokens = [t for t in (state_raw or "unknown").upper().split("+") if t]
+    base = tokens[0] if tokens else "UNKNOWN"
+    flags = tuple(t.rstrip("*") for t in tokens[1:])
+    if any(t.endswith("*") for t in tokens) or _DOWN_FLAGS.intersection(flags):
+        return NodeState.DOWN, flags
+    if _DRAIN_FLAGS.intersection(flags):
+        return NodeState.DRAIN, flags
+    return NodeState.from_slurm(base), flags
 
 
 def parse_gres(gres_str: str) -> int:
@@ -54,10 +78,8 @@ def parse_scontrol_output(raw: str, node_name: str, host: str) -> NodeStatus:
     for m in _RE_KV.finditer(flat):
         kv[m.group(1)] = m.group(2)
 
-    state_raw = kv.get("State", "unknown")
-    # State puede ser "IDLE+MIXED" etc; nos quedamos con el primero
-    state_token = state_raw.split("+")[0].split("*")[0]
-    state = NodeState.from_slurm(state_token)
+    state, state_flags = parse_node_state(kv.get("State", "unknown"))
+    reason_match = _RE_REASON.search(flat)
 
     try:
         cpus_alloc = int(kv.get("CPUAlloc", 0))
@@ -115,6 +137,8 @@ def parse_scontrol_output(raw: str, node_name: str, host: str) -> NodeStatus:
         pending_jobs=0,
         reachable=True,
         raw_scontrol=raw,
+        state_flags=state_flags,
+        reason=reason_match.group(1).strip() if reason_match else None,
     )
 
 
