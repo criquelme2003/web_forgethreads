@@ -45,14 +45,16 @@ function labelProblems(causes, effects) {
  * Ingreso manual de CC, CE y EE. Genera los mismos CSV que se subirían como archivo, así que la
  * validación y el lanzamiento son los del flujo de CSV. La diagonal de CC y EE queda fija en 1.
  */
-export default function ManualMatrices({ onChange, errors }) {
-  const [causesText, setCausesText] = useState('');
-  const [effectsText, setEffectsText] = useState('');
+export default function ManualMatrices({ onChange, errors, fixedLabels }) {
+  // Con `fixedLabels` (proyecto de expertos) las etiquetas vienen dadas y no se editan.
+  const [causesText, setCausesText] = useState(fixedLabels ? fixedLabels.causes.join('\n') : '');
+  const [effectsText, setEffectsText] = useState(fixedLabels ? fixedLabels.effects.join('\n') : '');
   const [values, setValues] = useState({}); // cellKey -> texto, sobrevive a reordenar etiquetas
   const causes = useMemo(() => parseLabels(causesText), [causesText]);
   const effects = useMemo(() => parseLabels(effectsText), [effectsText]);
   const labels = { causes, effects };
-  const problems = labelProblems(causes, effects);
+  // Las etiquetas fijas ya las validó el backend al crear el proyecto (y pueden superar el límite manual).
+  const problems = fixedLabels ? [] : labelProblems(causes, effects);
 
   useEffect(() => {
     if (problems.length) {
@@ -137,7 +139,7 @@ export default function ManualMatrices({ onChange, errors }) {
 
   return (
     <div className="manual">
-      <div className="grid-2">
+      {!fixedLabels && <div className="grid-2">
         <div className="field">
           <label htmlFor="causes">Causas ({causes.length})</label>
           <textarea id="causes" rows={5} placeholder={'Una por línea, ej.\nPrecio\nPublicidad'} value={causesText} onChange={(e) => setCausesText(e.target.value)} />
@@ -146,7 +148,7 @@ export default function ManualMatrices({ onChange, errors }) {
           <label htmlFor="effects">Efectos ({effects.length})</label>
           <textarea id="effects" rows={5} placeholder={'Una por línea, ej.\nVentas\nCostos'} value={effectsText} onChange={(e) => setEffectsText(e.target.value)} />
         </div>
-      </div>
+      </div>}
 
       {problems.length > 0 && (causesText || effectsText) && (
         <ul className="small notes err">{problems.map((p) => <li key={p}>{p}</li>)}</ul>

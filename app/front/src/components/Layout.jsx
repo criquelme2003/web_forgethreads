@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 const LINKS = [
-  { to: '/parameters', label: 'Encolar' },
+  { to: '/projects', label: 'Proyectos' },
   { to: '/fe', label: 'Caminos' },
   { to: '/jobs', label: 'Trabajos' },
   { to: '/gpu_status', label: 'GPU' },
@@ -9,8 +9,7 @@ const LINKS = [
 ];
 
 const SECTIONS = {
-  '/parameters': 'MaxMin',
-  '/execute_maxmin': 'MaxMin',
+  '/projects': 'Proyectos',
   '/jobs': 'Trabajos',
   '/gpu_status': 'GPU',
   '/cluster_status': 'Cluster',
@@ -19,7 +18,9 @@ const SECTIONS = {
 
 export default function Layout() {
   const { pathname } = useLocation();
-  const section = SECTIONS[pathname] || (pathname.startsWith('/fe/') ? 'Caminos' : '');
+  const section = SECTIONS[pathname]
+    || (pathname.startsWith('/fe/') ? 'Caminos' : '')
+    || (pathname.startsWith('/projects/') ? 'Proyectos' : '');
   return (
     <>
       <header className="topbar">

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch, apiJson } from '../api.js';
 
 function fmt(iso) {
@@ -84,19 +84,22 @@ export default function Jobs() {
       <div style={{ overflow: 'auto' }}>
         <table>
           <thead>
-            <tr><th>Job ID</th><th>Tipo</th><th>Estado</th><th>Nodo</th><th>Creado</th><th>Orden</th><th>Tiempo(s)</th></tr>
+            <tr><th>Job ID</th><th>Tipo</th><th>Proyecto</th><th>Estado</th><th>Nodo</th><th>Creado</th><th>Orden</th><th>Tiempo(s)</th></tr>
           </thead>
           <tbody id="tbody">
             {jobs === null && (
-              <tr><td colSpan="7" className="empty">Cargando…</td></tr>
+              <tr><td colSpan="8" className="empty">Cargando…</td></tr>
             )}
             {jobs !== null && jobs.length === 0 && (
-              <tr><td colSpan="7" className="empty">Sin trabajos {emptyLabel}</td></tr>
+              <tr><td colSpan="8" className="empty">Sin trabajos {emptyLabel}</td></tr>
             )}
             {jobs !== null && jobs.map((j) => (
               <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => (j.kind === 'fe' ? navigate(`/fe/jobs/${j.job_id}`) : showDetail(j.job_id))}>
                 <td className="mono">{j.job_id}</td>
                 <td>{KIND_LABELS[j.kind] || j.kind}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  {j.project_id != null ? <Link to={`/projects/${j.project_id}`}>#{j.project_id}</Link> : '—'}
+                </td>
                 <td><span className={`badge ${badgeClass(j.status)}`}>{j.status}</span></td>
                 <td>{j.node}</td>
                 <td className="small">{fmt(j.created_at)}</td>

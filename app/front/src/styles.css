@@ -113,3 +113,17 @@ table.matrix td:has(.cell-input){padding:2px}
 .cell-input:disabled{background:#f3f4f6;color:var(--muted);border-color:var(--border)}
 .cell-input.cell-empty{background:#fffbeb;border-color:#fcd34d}
 td.cell-err .cell-input{background:#fee2e2;border-color:#fca5a5;color:var(--err)}
+
+/* proyectos */
+.stack{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+.badge.estado-borrador{background:#f3f4f6;color:#374151;border:1px solid #d1d5db}
+.badge.estado-abierto{background:#d1fae5;color:var(--ok);border:1px solid #6ee7b7}
+.badge.estado-cerrado{background:#e0e7ff;color:#3730a3;border:1px solid #a5b4fc}
+.badge.inv-pendiente{background:#fef3c7;color:var(--warn);border:1px solid #fcd34d}
+.badge.inv-usada{background:#d1fae5;color:var(--ok);border:1px solid #6ee7b7}
+.badge.inv-revocada,.badge.inv-expirada{background:#f3f4f6;color:var(--muted);border:1px solid #d1d5db}
+.inline-input{padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;min-width:240px}
+.link-input{flex:1;min-width:240px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff}
+.link-btn{background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit}
+tr.row-muted td{color:var(--muted)}
+.field textarea:disabled{background:#f3f4f6}
