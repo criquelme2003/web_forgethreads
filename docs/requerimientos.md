@@ -1,6 +1,6 @@
 # Requerimientos: proyectos, expertos y barridos
 
-Estado: requerimientos cerrados (2026-10-05). Los puntos marcados **[supuesto]** están pendientes de confirmación.
+Estado: requerimientos cerrados (2026-10-05; sección 6, robustez del encolado, agregada el 2026-10-13). Los puntos marcados **[supuesto]** están pendientes de confirmación.
 Los cambios del lado del cluster están detallados en [scripts_wf_requerimientos.md](scripts_wf_requerimientos.md).
 
 ## Contexto
@@ -111,7 +111,45 @@ La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálc
 | RNF-04 | Tests de autorización por rol y por dueño para cada endpoint nuevo. |
 | RNF-05 | El notifier se encadena con `--dependency=afterany` (hoy `afterok`). Con `afterok`, si el job de cómputo falla o se corta por tiempo, el notifier queda pendiente para siempre y nunca reporta el error. Afecta a `build_notifier_command` en `app/services/slurm_submit.py`. |
 
-## 6. Modelo de datos (orientativo)
+## 6. Robustez del encolado
+
+Problema observado en producción: jobs que quedan `pending` para siempre en la app porque su nodo no está disponible.
+
+Hechos del entorno que condicionan la solución:
+
+- **Cada nodo es un cluster SLURM independiente** con disco local: un job enviado a un nodo solo puede correr en ese nodo, y su JOBID solo vale dentro de él.
+- **No hay `sacct`** en ningún nodo (`Slurm accounting storage is disabled`). Un job terminado solo aparece en `scontrol show job` durante `MinJobAge` (300 s por defecto); después, la única evidencia son los archivos en el disco del nodo.
+- Sin historial, si un nodo pierde su estado de SLURM los **JOBID pueden reutilizarse**.
+
+### 6.1 Por qué un cálculo puede quedar sin resultado
+
+| Caso | Cómo se detecta | ¿Se resuelve solo? |
+|---|---|---|
+| Esperando en la cola por recursos o prioridad | `PENDING`, motivo `Resources`, `Priority`, `BeginTime` | Sí |
+| Ejecutándose | `RUNNING` o `COMPLETING` | Sí |
+| Nodo no disponible | `PENDING` con motivo `ReqNodeNotAvail`, `NodeDown`, `PartitionDown` o `PartitionInactive`, o nodo `DRAIN`/`DOWN` en `scontrol show node` | No |
+| Retenido o mal configurado | `PENDING` con motivo `JobHeldUser`, `JobHeldAdmin`, `BadConstraints`, `PartitionConfig` o `launch failed requeued held` | No |
+| Notifier sin poder correr | notifier `PENDING` con motivo `DependencyNeverSatisfied` | No |
+| Terminado, pero el callback se perdió | fuera de la cola; existe `jobs_failed_notify/<id>.json` o `jobs_results/<id>.*` | Recuperable |
+| Desaparecido | ni en `squeue`, ni en `scontrol show job`, ni archivos de resultado | No |
+| Nodo inalcanzable por SSH | falla la conexión del pool | Desconocido hasta que vuelva |
+
+### 6.2 Requerimientos
+
+| ID | Requerimiento |
+|---|---|
+| RF-38 | Por cada cálculo se guardan: nodo, JOBID del cómputo, JOBID del notifier, nombre del job y hora de envío. |
+| RF-39 | **Revisión periódica cada 1 minuto** (configurable) de los cálculos sin resultado. Una consulta por nodo, no por job: `squeue -h -j <id1>,<id2>,… -o "%i\|%j\|%T\|%r\|%V"` y `scontrol show node`. Si no hay cálculos pendientes, no se consulta nada. El intervalo debe ser bastante menor que `MinJobAge`, para alcanzar a ver el estado final de cada job. |
+| RF-40 | **Verificación de identidad**: un JOBID solo se da por bueno si el nombre del job y la hora de envío coinciden con los guardados. Si no coinciden, el JOBID fue reutilizado y el cálculo se trata como `desaparecido`. |
+| RF-41 | Estados del cálculo, visibles en la lista con su motivo: `en_cola`, `ejecutando`, `bloqueado` (nodo no disponible, retenido, dependencia imposible, tiempo de espera excedido), `nodo_inalcanzable`, `desaparecido` y `reemplazado`, además de los finales `success`, `error` y `parcial`. |
+| RF-42 | **Si el job ya no está en la cola**, se consulta `scontrol show job` para leer el estado final y el código de salida. Si tampoco aparece, se buscan por SFTP, en este orden: (1) `jobs_failed_notify/<id>.json`: el callback se perdió y se procesa como si hubiera llegado; (2) `jobs_results/<id>.*`: se procesa el resultado; (3) solo `logs/*.<id>`: `error` con el log adjunto; (4) nada: `desaparecido`. |
+| RF-43 | **Relanzamiento manual.** Sobre un cálculo `bloqueado`, `nodo_inalcanzable` o `desaparecido`, el admin dueño puede cancelarlo (`scancel` del job y del notifier, si el nodo responde) y relanzarlo en otro nodo con los mismos parámetros. El relanzamiento crea un cálculo nuevo vinculado al original. No hay relanzamiento automático. |
+| RF-44 | Al relanzar, el original pasa a `reemplazado` y su token se revoca: si su nodo revive y el job termina, el callback tardío se rechaza y no pisa el resultado del relanzamiento. |
+| RF-45 | El backend guarda los inputs de cada cálculo (parámetros y matrices de FE) para poder relanzarlo en otro nodo. Hoy las matrices solo quedan en el disco del nodo original. |
+| RF-46 | **Prevención al enviar**: antes del `sbatch` se verifica el estado del nodo sin la caché del selector. Si el `sbatch` falla, se prueba con el siguiente nodo disponible. Ocurre antes de que exista el job, así que no contradice el RF-43. |
+| RF-47 | Un cálculo que pasa más de un **tiempo máximo en cola** (configurable, 2 horas por defecto) sin empezar se marca `bloqueado (tiempo de espera excedido)`, aunque SLURM no dé un motivo claro. |
+
+## 7. Modelo de datos (orientativo)
 
 ```
 User              id, email, password_hash, rol (superadmin|admin), activo
@@ -120,15 +158,19 @@ Project           id, owner_id, nombre, descripcion, tipo, estado,
 ExpertInvitation  id, project_id, email, token_hash, expira_at, usado_at, revocado_at
 ExpertInput       id, project_id, invitation_id, cc, ce, ee, excluido, created_at
 Computation       id, project_id, tipo (fe_experto|fe_agregado|maxmin|barrido),
-                  params (JSON), input_ids[], estado (pending|success|error|parcial),
-                  slurm_job_id, notifier_job_id, token_hash, resultado (JSON / ruta), logs
+                  params (JSON), inputs (JSON / ruta), input_ids[],
+                  estado (ver RF-41), motivo_estado,
+                  nodo, slurm_job_id, notifier_job_id, job_name, submitted_at,
+                  ultima_revision_at, reemplaza_a (id), token_hash, token_revocado,
+                  resultado (JSON / ruta), logs
 ```
 
 `Computation` generaliza al `JobRecord` actual.
 
-## 7. Fuera de alcance por ahora
+## 8. Fuera de alcance por ahora
 
 - Envío real de correos (SMTP).
 - Proyectos compartidos entre administradores.
 - Acceso del experto a sus resultados.
 - Ver el avance de un barrido mientras corre.
+- Relanzamiento automático de cálculos bloqueados.
