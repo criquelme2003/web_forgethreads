@@ -43,6 +43,8 @@ class JobStatusResponse(BaseModel):
     logs: str | None = None
     params: dict | None = None
     result: dict | None = None
+    project_id: int | None = None
+    input_id: int | None = None
 
     @classmethod
     def from_record(cls, r: JobRecord) -> "JobStatusResponse":
@@ -58,6 +60,8 @@ class JobStatusResponse(BaseModel):
             logs=r.logs,
             params=r.params,
             result=r.result,
+            project_id=r.project_id,
+            input_id=r.input_id,
         )
 
 

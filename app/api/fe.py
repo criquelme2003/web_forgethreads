@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 import asyncssh
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -105,6 +106,52 @@ def _validation_response(data: FeInput) -> FeValidationResponse:
     )
 
 
+async def launch_fe_job(
+    *,
+    pool: SSHConnectionPool,
+    store: JobStore,
+    settings: Settings,
+    node: str,
+    cc: np.ndarray,
+    ce: np.ndarray,
+    ee: np.ndarray,
+    causes: list[str],
+    effects: list[str],
+    thr: float,
+    maxorder: int,
+    project_id: int | None = None,
+    input_id: int | None = None,
+) -> str:
+    """Sube las matrices de un experto al nodo por SFTP y lanza fe_job.sh + notifier. Devuelve el JOBID."""
+    request_id = uuid.uuid4().hex
+    meta = {
+        "causes": causes,
+        "effects": effects,
+        "thr": thr,
+        "maxorder": maxorder,
+        "reps": SINGLE_EXPERT_REPS,
+    }
+    files = build_fe_input_files(cc, ce, ee, meta)
+    try:
+        input_dir = await upload_fe_input(pool, node, settings.scripts_wf_dir, request_id, files)
+    except (asyncssh.Error, OSError) as e:
+        logger.warning("No se pudo subir el input de fe_job a %s: %s", node, e)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"No se pudo subir el input al nodo {node}")
+
+    return await launch_with_notifier(
+        pool=pool,
+        store=store,
+        settings=settings,
+        node=node,
+        command=build_fe_job_command(settings.scripts_wf_dir, input_dir),
+        script="fe_job.sh",
+        kind="fe",
+        params={**meta, "request_id": request_id},
+        project_id=project_id,
+        input_id=input_id,
+    )
+
+
 @router.post("/app/fe/validate", response_model=FeValidationResponse)
 async def validate_fe_input(
     body: FeMatricesRequest,
@@ -132,30 +179,18 @@ async def execute_fe(
         )
 
     node = await resolve_node(body.nodo, pool, selector)
-    request_id = uuid.uuid4().hex
-    meta = {
-        "causes": data.causes,
-        "effects": data.effects,
-        "thr": body.thr,
-        "maxorder": body.maxorder,
-        "reps": SINGLE_EXPERT_REPS,
-    }
-    files = build_fe_input_files(data.cc, data.ce, data.ee, meta)
-    try:
-        input_dir = await upload_fe_input(pool, node, settings.scripts_wf_dir, request_id, files)
-    except (asyncssh.Error, OSError) as e:
-        logger.warning("No se pudo subir el input de fe_job a %s: %s", node, e)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"No se pudo subir el input al nodo {node}")
-
-    job_id = await launch_with_notifier(
+    job_id = await launch_fe_job(
         pool=pool,
         store=store,
         settings=settings,
         node=node,
-        command=build_fe_job_command(settings.scripts_wf_dir, input_dir),
-        script="fe_job.sh",
-        kind="fe",
-        params={**meta, "request_id": request_id},
+        cc=data.cc,
+        ce=data.ce,
+        ee=data.ee,
+        causes=data.causes,
+        effects=data.effects,
+        thr=body.thr,
+        maxorder=body.maxorder,
     )
     return FeExecuteResponse(job_id=job_id, node=node, warnings=data.warnings)
 

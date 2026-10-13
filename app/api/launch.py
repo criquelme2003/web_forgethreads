@@ -45,6 +45,8 @@ async def launch_with_notifier(
     script: str,
     kind: JobKind,
     params: dict | None = None,
+    project_id: int | None = None,
+    input_id: int | None = None,
 ) -> str:
     """Corre `command` (un sbatch) en `node`, registra el job y encadena notifier.sh.
 
@@ -64,7 +66,9 @@ async def launch_with_notifier(
 
     # El token se genera recién aquí (JobStore.create) y se pasa a notifier.sh, que es
     # el único script que llama a /app/job_callback y por tanto el único que lo necesita.
-    record = await store.create(job_id, node=node, kind=kind, params=params)
+    record = await store.create(
+        job_id, node=node, kind=kind, params=params, project_id=project_id, input_id=input_id
+    )
 
     callback_url = f"{settings.public_callback_base_url}/app/job_callback"
     notifier_cmd = build_notifier_command(

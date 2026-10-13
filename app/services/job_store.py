@@ -29,17 +29,22 @@ class JobRecord:
     kind: JobKind = "maxmin"
     params: dict | None = None  # parámetros con que se lanzó el job
     result: dict | None = None  # resumen que reporta el notifier (ej. orders/rows_per_order de fe_job)
+    project_id: int | None = None  # proyecto al que pertenece el cálculo (None: jobs sueltos)
+    input_id: int | None = None  # input de experto que originó el cálculo (proyectos de expertos)
 
 
 _COLUMNS = (
     "job_id, status, node, token, effective_order, computation_time_s, logs, "
-    "created_at, updated_at, kind, params, result"
+    "created_at, updated_at, kind, params, result, project_id, input_id"
 )
+_PLACEHOLDERS = ",".join("?" * len(_COLUMNS.split(",")))
 # Columnas agregadas después de la versión inicial de la tabla: se crean si faltan.
 _ADDED_COLUMNS = {
     "kind": "TEXT NOT NULL DEFAULT 'maxmin'",
     "params": "TEXT",
     "result": "TEXT",
+    "project_id": "INTEGER",
+    "input_id": "INTEGER",
 }
 
 
@@ -160,6 +165,8 @@ class JobStore:
             kind=row["kind"],  # type: ignore
             params=_load(row["params"]),
             result=_load(row["result"]),
+            project_id=row["project_id"],
+            input_id=row["input_id"],
         )
 
     @staticmethod
@@ -177,23 +184,31 @@ class JobStore:
             record.kind,
             _dump(record.params),
             _dump(record.result),
+            record.project_id,
+            record.input_id,
         )
 
     async def create(
-        self, job_id: str, node: str, kind: JobKind = "maxmin", params: dict | None = None
+        self,
+        job_id: str,
+        node: str,
+        kind: JobKind = "maxmin",
+        params: dict | None = None,
+        project_id: int | None = None,
+        input_id: int | None = None,
     ) -> JobRecord:
         """Crea el registro del job con un token propio (usado como --auth-token del notifier)."""
         now = datetime.now(UTC)
         token = secrets.token_urlsafe(32)
         record = JobRecord(
             job_id=job_id, status="pending", node=node, created_at=now, updated_at=now, token=token,
-            kind=kind, params=params,
+            kind=kind, params=params, project_id=project_id, input_id=input_id,
         )
         async with self._lock:
             conn = self._connect()
             try:
                 conn.execute(
-                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
                     self._record_values(record),
                 )
                 conn.commit()
@@ -224,7 +239,8 @@ class JobStore:
             conn = self._connect()
             try:
                 cur = conn.execute(
-                    "SELECT token, created_at, kind, params FROM jobs WHERE job_id=?", (job_id,)
+                    "SELECT token, created_at, kind, params, project_id, input_id FROM jobs WHERE job_id=?",
+                    (job_id,),
                 )
                 existing = cur.fetchone()
                 if existing:
@@ -232,8 +248,10 @@ class JobStore:
                     record.created_at = _parse_dt(existing["created_at"])
                     record.kind = existing["kind"]
                     record.params = _load(existing["params"])
+                    record.project_id = existing["project_id"]
+                    record.input_id = existing["input_id"]
                 conn.execute(
-                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
                     self._record_values(record),
                 )
                 conn.commit()
@@ -293,6 +311,17 @@ class JobStore:
                 cur = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC")
                 rows = cur.fetchall()
                 return [self._row_to_record(r) for r in rows]
+            finally:
+                conn.close()
+
+    async def list_by_project(self, project_id: int) -> list[JobRecord]:
+        async with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC", (project_id,)
+                )
+                return [self._row_to_record(r) for r in cur.fetchall()]
             finally:
                 conn.close()
 

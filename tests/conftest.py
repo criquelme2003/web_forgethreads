@@ -1,10 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_job_store
+from app.api.deps import get_job_store, get_project_store
 from app.core.config import Settings, get_settings
 from app.main import app
 from app.services.job_store import JobStore
+from app.services.project_store import ProjectStore
 
 TEST_USERNAME = "testadmin"
 TEST_PASSWORD = "testpass"
@@ -55,6 +56,8 @@ def client(tmp_path) -> TestClient:
     # Base temporal: los tests no deben tocar data/jobs.db
     store = JobStore(str(tmp_path / "jobs.db"))
     app.dependency_overrides[get_job_store] = lambda: store
+    projects = ProjectStore(str(tmp_path / "jobs.db"))
+    app.dependency_overrides[get_project_store] = lambda: projects
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

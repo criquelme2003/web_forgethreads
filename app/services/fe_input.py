@@ -153,8 +153,19 @@ def _reordered(parsed: ParsedCsv, rows: list[str], cols: list[str]) -> np.ndarra
     )
 
 
-def load_fe_input(cc_text: str, ce_text: str, ee_text: str) -> FeInput:
-    """Parsea y valida las tres matrices; si son válidas, las devuelve ordenadas y como float32."""
+def load_fe_input(
+    cc_text: str,
+    ce_text: str,
+    ee_text: str,
+    causes: list[str] | None = None,
+    effects: list[str] | None = None,
+) -> FeInput:
+    """Parsea y valida las tres matrices; si son válidas, las devuelve ordenadas y como float32.
+
+    Si se pasan `causes` y `effects` (las etiquetas de un proyecto), las matrices deben traer
+    exactamente esas etiquetas, en cualquier orden, y el resultado queda en el orden del proyecto.
+    Si no, las causas salen de las columnas de CC y los efectos de las de EE.
+    """
     errors: list[CellError] = []
     warnings: list[str] = []
     previews = {
@@ -163,7 +174,8 @@ def load_fe_input(cc_text: str, ce_text: str, ee_text: str) -> FeInput:
         "EE": parse_csv("EE", ee_text, errors),
     }
     cc, ce, ee = previews["CC"], previews["CE"], previews["EE"]
-    causes, effects = cc.col_labels, ee.col_labels
+    causes = list(causes) if causes is not None else cc.col_labels
+    effects = list(effects) if effects is not None else ee.col_labels
     result = FeInput(causes=causes, effects=effects, previews=previews, errors=errors, warnings=warnings)
 
     for side, labels in (("causas", causes), ("efectos", effects)):

@@ -17,7 +17,7 @@ uv run uvicorn app.main:app --reload            # servidor local
 ## Arquitectura
 
 - `app/api/` — routers FastAPI. Dependencias compartidas en `api/deps.py` (`require_user`, `get_job_store`, `get_ssh_pool`, `get_node_selector`); usarlas siempre en vez de instanciar servicios en el router.
-- `app/services/` — lógica: `job_store` (SQLite), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
+- `app/services/` — lógica: `job_store` (SQLite), `project_store` (proyectos, invitaciones e inputs; misma base), `mailer` (SMTP de invitaciones), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
 - `app/ssh/` — pool asyncssh singleton, creado y cerrado en `app/lifespan.py`.
 - `app/repositories/slurm.py` — consultas de estado SLURM.
 - `app/core/config.py` — `Settings` (pydantic-settings, lee `.env`); `get_settings()` está cacheado.
@@ -36,6 +36,14 @@ uv run uvicorn app.main:app --reload            # servidor local
 2. `POST /app/fe/execute` sube `CC.npy`, `CE.npy`, `EE.npy` y `meta.json` por SFTP a `<scripts_wf>/jobs_inputs/<request_id>/` (`app/services/fe_remote.py`) y lanza `sbatch fe_job.sh --input-dir ...` + notifier (`app/api/launch.py`).
 3. El callback guarda el resumen (`orders`, `rows_per_order`, `k`) en `jobs.result`.
 4. `GET /app/fe/jobs/{id}/paths` descarga por SFTP `jobs_results/<id>/paths_order_<o>.csv` la primera vez y los cachea en `fe_results_dir`.
+
+### Proyectos
+
+- Tipos `expertos` (estados `borrador → abierto → cerrado`, reabrible) y `simulacion` (`abierto ↔ cerrado`). Las etiquetas, `thr` y `maxorder` solo se editan en `borrador`.
+- Los cálculos de un proyecto son filas de `jobs` con `project_id` (e `input_id` si vienen de un experto). `POST /app/execute_maxmin` exige `project_id` de un proyecto de simulación abierto.
+- Invitaciones: token de un solo uso, solo se guarda su hash; el enlace (`/front/invite/<token>`) se muestra al crear o regenerar. Con `INVITATION_DELIVERY=smtp` además se envía por correo (puerto 465 = SSL implícito).
+- `/app/invite/{token}` es público (sin sesión): info, validación contra las etiquetas del proyecto y envío. El envío consume el token en la misma transacción que guarda el input y lanza `fe_job.sh` en segundo plano; si el lanzamiento falla queda `launch_error` en el input y el admin reintenta con `POST .../inputs/{id}/retry`.
+- Al abrir la base, los jobs MaxMin sin proyecto se mueven a un proyecto de simulación «MaxMin (jobs anteriores)».
 
 El contrato con el cluster está en el README de [scripts_wf](https://github.com/criquelme2003/scripts_wf).
 

@@ -23,10 +23,13 @@ def build_new_job_command(
     conectividad_promedio: float,
     seed: int,
 ) -> str:
+    # c entero se pasa sin decimales ("8", no "8.0"), igual que antes de que fuera decimal.
+    c = float(conectividad_promedio)
+    conectividad = str(int(c)) if c.is_integer() else repr(c)
     return (
         f"cd {shlex.quote(scripts_wf_dir)} && "
         f"sbatch new_job.sh --nodos {numero_nodos} --thr {threshold} "
-        f"--conectividad {conectividad_promedio} --seed {seed}"
+        f"--conectividad {conectividad} --seed {seed}"
     )
 
 
