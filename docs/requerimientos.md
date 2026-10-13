@@ -33,8 +33,8 @@ La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálc
 
 | ID | Requerimiento |
 |---|---|
-| RF-08 | Al crear el proyecto, el admin define las etiquetas de `m` causas y `n` efectos, y los parámetros de cálculo: `THR` y `maxorder`. |
-| RF-09 | Estados: `borrador → abierto → cerrado`. Las etiquetas y los parámetros solo se editan en `borrador`; desde `abierto` quedan fijos, para que los resultados de todos los expertos sean comparables. |
+| RF-08 | Al crear el proyecto, el admin define las etiquetas de `m` causas y `n` efectos. `THR` y `maxorder` no son del proyecto: se indican al lanzar cada cálculo (RF-21). |
+| RF-09 | Estados: `borrador → abierto → cerrado` (un proyecto cerrado se puede reabrir, sin volver a `borrador`). Las etiquetas solo se editan en `borrador`; desde `abierto` quedan fijas, para que los inputs de todos los expertos sean comparables. |
 
 ### 3.2 Invitaciones
 
@@ -61,15 +61,15 @@ La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálc
 
 | ID | Requerimiento |
 |---|---|
-| RF-21 | Al recibir un input se lanza automáticamente `forgeffects.FE` con los tensores `(1,m,m)`, `(1,m,n)` y `(1,n,n)`, las etiquetas, `THR` y `maxorder` del proyecto, y **[supuesto]** `reps=1`. Corre en el nodo del cluster que elige el `NodeSelector`, con GPU. |
+| RF-21 | Al recibir un input solo se guarda; no se lanza ningún cálculo. El admin lanza `forgeffects.FE` sobre los inputs que elige (por defecto, los no excluidos) indicando `THR` y `maxorder`, con los tensores `(1,m,m)`, `(1,m,n)` y `(1,n,n)`, las etiquetas del proyecto y **[supuesto]** `reps=1`. Cada lanzamiento crea un cálculo por input, que registra sus parámetros; un input puede tener varios cálculos con parámetros distintos. Corre en el nodo que elige el `NodeSelector` (o el que indique el admin), con GPU. |
 | RF-22 | El resultado es, por cada orden, una tabla `From, Through_1..k, To, Mean`. `Count` y `SD` no aportan información con un solo experto (el bootstrap remuestrea informantes). |
-| RF-23 | Si el cálculo falla, el input queda guardado con el cálculo en estado `error` y el log visible. El admin dueño puede reintentarlo; el reintento crea un nuevo cálculo con el mismo input. |
+| RF-23 | Si el cálculo falla, el input queda guardado con el cálculo en estado `error` y el log visible. Si el lanzamiento falla, se informa por input y los demás siguen. Para reintentar, el admin dueño vuelve a lanzar ese input: se crea un nuevo cálculo con el mismo input. |
 
 ### 3.5 Análisis conjunto
 
 | ID | Requerimiento |
 |---|---|
-| RF-24 | **Cálculo agregado**: el admin lanza `FE` sobre los inputs no excluidos apilados (`k` expertos, `k ≥ 2`). El admin define `reps` del bootstrap; `THR` y `maxorder` son los del proyecto. El resultado incluye `Count`, `Mean` y `SD`. |
+| RF-24 | **Cálculo agregado**: el admin lanza `FE` sobre los inputs no excluidos apilados (`k` expertos, `k ≥ 2`). El admin define `reps` del bootstrap, `THR` y `maxorder`. El resultado incluye `Count`, `Mean` y `SD`. |
 | RF-25 | Se pueden lanzar varios cálculos agregados; cada uno registra qué inputs incluyó. |
 | RF-26 | **Comparación**: Sankeys de los expertos elegidos lado a lado, y una tabla de caminos con una columna por experto (si tiene el camino y su `Mean`) más el número de expertos que lo comparten. |
 
@@ -154,7 +154,7 @@ Hechos del entorno que condicionan la solución:
 ```
 User              id, email, password_hash, rol (superadmin|admin), activo
 Project           id, owner_id, nombre, descripcion, tipo, estado,
-                  causas[], efectos[], thr, maxorder            (expertos)
+                  causas[], efectos[]                          (expertos)
 ExpertInvitation  id, project_id, email, token_hash, expira_at, usado_at, revocado_at
 ExpertInput       id, project_id, invitation_id, cc, ce, ee, excluido, created_at
 Computation       id, project_id, tipo (fe_experto|fe_agregado|maxmin|barrido),

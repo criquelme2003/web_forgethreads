@@ -1,32 +1,27 @@
 """Interfaz pública del experto: se accede con el token de la invitación, sin sesión (RF-05).
 
 El experto ve el proyecto y sus etiquetas, valida sus matrices con vista previa y confirma el
-envío. Al confirmar se consume el token (RF-11) y se lanza el cálculo en segundo plano (RF-21).
+envío. Al confirmar se guarda el input y se consume el token (RF-11); los cálculos los lanza
+el admin después, con el THR y el orden máximo que elija (RF-21).
 Después del envío no ve resultados (RF-19).
 """
 
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.api.deps import get_job_store, get_node_selector, get_project_store, get_ssh_pool
+from app.api.deps import get_project_store
 from app.api.fe import FeMatricesRequest, FeValidationResponse, _validation_response
-from app.api.projects import launch_expert_computation
-from app.core.config import Settings, get_settings
 from app.services.fe_input import FeInput, load_fe_input
-from app.services.job_store import JobStore
-from app.services.node_selector import NodeSelector
 from app.services.project_store import (
-    ExpertInput,
     Invitation,
     InvitationNotFoundError,
     InvitationUnavailableError,
     Project,
     ProjectStore,
 )
-from app.ssh.pool import SSHConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -98,36 +93,13 @@ async def validate_invite_input(
     return _validation_response(_load(body, project))
 
 
-async def _launch_in_background(
-    project: Project,
-    item: ExpertInput,
-    pool: SSHConnectionPool,
-    selector: NodeSelector,
-    store: JobStore,
-    projects: ProjectStore,
-    settings: Settings,
-) -> None:
-    try:
-        await launch_expert_computation(
-            project=project, item=item, pool=pool, selector=selector, store=store,
-            projects=projects, settings=settings,
-        )
-    except HTTPException as e:
-        # El input queda guardado con el error; el admin lo ve y puede reintentar (RF-23).
-        logger.warning("No se pudo lanzar el cálculo del input %s: %s", item.id, e.detail)
-
-
 @router.post("/{token}/submit", response_model=SubmitResponse)
 async def submit_invite_input(
     token: str,
     body: FeMatricesRequest,
-    background: BackgroundTasks,
-    settings: Annotated[Settings, Depends(get_settings)],
     projects: Annotated[ProjectStore, Depends(get_project_store)],
-    store: Annotated[JobStore, Depends(get_job_store)],
-    pool: Annotated[SSHConnectionPool, Depends(get_ssh_pool)],
-    selector: Annotated[NodeSelector, Depends(get_node_selector)],
 ) -> SubmitResponse:
+    """Guarda el input y consume el token. No lanza cálculos: los lanza el admin (RF-21)."""
     _, project = await _resolve(token, projects)
     data = _load(body, project)
     if not data.valid:
@@ -141,5 +113,5 @@ async def submit_invite_input(
         )
     except InvitationUnavailableError:
         raise HTTPException(status.HTTP_410_GONE, "Esta invitación ya no está disponible.")
-    background.add_task(_launch_in_background, project, item, pool, selector, store, projects, settings)
+    logger.info("Input %s recibido en el proyecto %s", item.id, project.id)
     return SubmitResponse()

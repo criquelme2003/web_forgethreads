@@ -127,3 +127,7 @@ td.cell-err .cell-input{background:#fee2e2;border-color:#fca5a5;color:var(--err)
 .link-btn{background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit}
 tr.row-muted td{color:var(--muted)}
 .field textarea:disabled{background:#f3f4f6}
+.calc-list{display:grid;gap:4px}
+.calc-list a{text-decoration:none}
+.compute-form{border:1px solid var(--border);border-radius:var(--radius);padding:14px;background:#f9fafb;margin-bottom:14px;display:grid;gap:12px}
+.compute-form .btn-primary{white-space:nowrap}

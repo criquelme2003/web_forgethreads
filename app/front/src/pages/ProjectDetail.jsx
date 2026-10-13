@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiFetch } from '../api.js';
+import { apiFetch, apiJson } from '../api.js';
 import { errorText } from '../components/MatricesInput.jsx';
 import MaxMinForm from '../components/MaxMinForm.jsx';
 import { ExpertFields, expertPayload, fmtDate, TIPO_LABELS } from './Projects.jsx';
@@ -13,7 +13,7 @@ const TRANSITION_LABELS = {
 };
 const TRANSITION_CONFIRM = {
   abierto: {
-    borrador: 'Al abrir el proyecto, las etiquetas, THR y el orden máximo quedan fijos. ¿Continuar?',
+    borrador: 'Al abrir el proyecto, las etiquetas quedan fijas. ¿Continuar?',
   },
   cerrado: {
     abierto: '¿Cerrar el proyecto? No se aceptarán nuevas respuestas ni cálculos hasta reabrirlo.',
@@ -43,8 +43,6 @@ function EditProject({ project, onSaved, onCancel }) {
   const [expert, setExpert] = useState({
     causas: project.causas.join('\n'),
     efectos: project.efectos.join('\n'),
-    thr: String(project.thr ?? ''),
-    maxorder: String(project.maxorder ?? ''),
   });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -71,7 +69,7 @@ function EditProject({ project, onSaved, onCancel }) {
       </div>
       {draft && <ExpertFields value={expert} onChange={setExpert} />}
       {project.tipo === 'expertos' && !draft && (
-        <p className="small muted" style={{ margin: 0 }}>Las etiquetas y los parámetros quedaron fijos al abrir el proyecto.</p>
+        <p className="small muted" style={{ margin: 0 }}>Las etiquetas quedaron fijas al abrir el proyecto.</p>
       )}
       <div className="actions">
         <button type="submit" className="btn-primary" disabled={busy || !nombre.trim()}>{busy ? 'Guardando…' : 'Guardar'}</button>
@@ -205,20 +203,118 @@ function Invitations({ project, onChanged }) {
 
 // --- inputs de expertos ------------------------------------------------------------------------
 
-function canRetry(item) {
-  const last = item.calculos[0];
-  return last ? ['error', 'partial'].includes(last.status) : true;
+function ComputationList({ calculos }) {
+  if (!calculos.length) return <span className="small muted">sin cálculos</span>;
+  return (
+    <div className="calc-list">
+      {calculos.map((c) => (
+        <Link key={c.job_id} to={`/fe/jobs/${c.job_id}`} className="small">
+          <span className={`badge ${jobBadge(c.status)}`}>{c.status}</span>{' '}
+          THR {c.thr ?? '—'} · orden {c.maxorder ?? '—'} · job <span className="mono">{c.job_id}</span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+/** Lanza forgeffects sobre los inputs elegidos con el THR y el orden máximo que indica el admin (RF-21). */
+function ComputeForm({ project, selected, names, onDone }) {
+  const [thr, setThr] = useState('0.5');
+  const [maxorder, setMaxorder] = useState('3');
+  const [nodo, setNodo] = useState('');
+  const [nodeOptions, setNodeOptions] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({ text: '', kind: 'muted' });
+
+  useEffect(() => {
+    apiJson('/app/nodes/available')
+      .then((data) => setNodeOptions(Array.isArray(data.options) ? data.options : []))
+      .catch(() => {});
+  }, []);
+
+  async function onSubmit(e) {
+    e.preventDefault();
+    const thrValue = Number(thr.replace(',', '.'));
+    const maxorderValue = Number(maxorder);
+    if (!(thrValue >= 0 && thrValue <= 1)) {
+      setMsg({ text: 'THR debe estar en [0,1].', kind: 'err' });
+      return;
+    }
+    if (!Number.isInteger(maxorderValue) || maxorderValue < 2 || maxorderValue > 10) {
+      setMsg({ text: 'El orden máximo debe ser un entero entre 2 y 10.', kind: 'err' });
+      return;
+    }
+    setBusy(true);
+    setMsg({ text: `Lanzando ${selected.length} cálculos…`, kind: 'muted' });
+    const { ok, data } = await send(`/app/projects/${project.id}/compute`, 'POST', {
+      thr: thrValue, maxorder: maxorderValue, nodo: nodo || null, input_ids: selected,
+    }).catch(() => ({ ok: false, data: {} }));
+    setBusy(false);
+    if (!ok) {
+      setMsg({ text: errorText(data, 'No se pudieron lanzar los cálculos'), kind: 'err' });
+      return;
+    }
+    if (data.errores.length) {
+      const detail = data.errores.map((x) => `${names[x.input_id] || `input ${x.input_id}`}: ${x.detail}`).join(' · ');
+      setMsg({ text: `${data.lanzados.length} lanzados, ${data.errores.length} con error (${detail}). Puedes volver a lanzarlos.`, kind: 'err' });
+    } else {
+      setMsg({ text: `${data.lanzados.length} cálculos lanzados.`, kind: 'ok' });
+    }
+    onDone();
+  }
+
+  return (
+    <form className="compute-form" onSubmit={onSubmit} noValidate>
+      <div className="grid-3">
+        <div className="field">
+          <label htmlFor="compute-thr">THR</label>
+          <input id="compute-thr" type="text" inputMode="decimal" value={thr} onChange={(e) => setThr(e.target.value)} />
+          <div className="hint">Umbral en [0,1]</div>
+        </div>
+        <div className="field">
+          <label htmlFor="compute-maxorder">Orden máximo</label>
+          <input id="compute-maxorder" type="number" step="1" min="2" max="10" value={maxorder} onChange={(e) => setMaxorder(e.target.value)} />
+          <div className="hint">Entero entre 2 y 10</div>
+        </div>
+        <div className="field">
+          <label htmlFor="compute-nodo">Nodo</label>
+          <select id="compute-nodo" value={nodo} onChange={(e) => setNodo(e.target.value)}>
+            <option value="">Automático</option>
+            {nodeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <div className="hint">Nodo SLURM con GPU</div>
+        </div>
+      </div>
+      <div className="actions">
+        <button type="submit" className="btn-primary" disabled={busy || selected.length === 0}>
+          {busy ? 'Lanzando…' : `Calcular ${selected.length} ${selected.length === 1 ? 'input' : 'inputs'}`}
+        </button>
+        <span className={`status ${msg.kind} small`} role="status" aria-live="polite">{msg.text}</span>
+      </div>
+    </form>
+  );
 }
 
 function Inputs({ project, onChanged }) {
   const [items, setItems] = useState(null);
+  const [selected, setSelected] = useState(null); // Set de ids; null = aún sin cargar
   const [msg, setMsg] = useState('');
-  const [busyId, setBusyId] = useState(null);
+  const [pollKey, setPollKey] = useState(0);
+  const knownIds = useRef(null); // ids ya vistos, para elegir por defecto solo los inputs nuevos
 
   const load = useCallback(async () => {
     const { ok, data } = await send(`/app/projects/${project.id}/inputs`, 'GET').catch(() => ({}));
-    if (ok) setItems(data);
-    return ok ? data : null;
+    if (!ok) return null;
+    setItems(data);
+    // Por defecto quedan elegidos los inputs no excluidos; los nuevos se agregan a la selección.
+    const known = knownIds.current;
+    setSelected((prev) => {
+      const next = new Set(prev ? [...prev].filter((id) => data.some((i) => i.id === id)) : []);
+      for (const i of data) if (!i.excluido && (known === null || !known.has(i.id))) next.add(i.id);
+      return next;
+    });
+    knownIds.current = new Set(data.map((i) => i.id));
+    return data;
   }, [project.id]);
 
   useEffect(() => {
@@ -227,79 +323,85 @@ function Inputs({ project, onChanged }) {
     async function poll() {
       const data = await load();
       if (cancelled) return;
-      // Sigue consultando mientras haya cálculos en curso (o envíos recientes sin cálculo aún).
-      const pending = (data || []).some((i) => i.calculos[0]?.status === 'pending' || (!i.calculos.length && !i.launch_error));
-      if (pending) timer = setTimeout(poll, POLL_MS);
+      // Sigue consultando mientras haya cálculos en curso.
+      if ((data || []).some((i) => i.calculos.some((c) => c.status === 'pending'))) timer = setTimeout(poll, POLL_MS);
     }
     poll();
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [load]);
+  }, [load, pollKey]);
 
   async function toggleExcluded(item) {
     const { ok, data } = await send(`/app/projects/${project.id}/inputs/${item.id}`, 'PATCH', { excluido: !item.excluido })
       .catch(() => ({ ok: false, data: {} }));
-    if (ok) load();
-    else setMsg(errorText(data, 'No se pudo actualizar el input'));
+    if (!ok) {
+      setMsg(errorText(data, 'No se pudo actualizar el input'));
+      return;
+    }
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (data.excluido) next.delete(item.id);
+      return next;
+    });
+    load();
   }
 
-  async function retry(item) {
-    setBusyId(item.id);
-    setMsg('');
-    const { ok, data } = await send(`/app/projects/${project.id}/inputs/${item.id}/retry`, 'POST')
-      .catch(() => ({ ok: false, data: {} }));
-    setBusyId(null);
-    if (!ok) setMsg(errorText(data, 'No se pudo relanzar el cálculo'));
-    await load();
-    onChanged();
+  function toggleSelected(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
+
+  const all = items || [];
+  const sel = selected || new Set();
+  const allSelected = all.length > 0 && all.every((i) => sel.has(i.id));
 
   return (
     <div className="card">
       <h2>Inputs de expertos</h2>
       <p className="sub">
-        Al recibir un input se lanza automáticamente forgeffects con THR = {project.thr} y orden máximo {project.maxorder}.
-        Un input excluido se conserva, pero no entra en los análisis conjuntos.
+        Los inputs se guardan al recibirse; los cálculos se lanzan desde aquí con el THR y el orden máximo que elijas,
+        y un mismo input puede tener varios cálculos. Un input excluido se conserva, pero no entra en los análisis conjuntos.
       </p>
+      {all.length > 0 && <ComputeForm project={project} selected={all.filter((i) => sel.has(i.id)).map((i) => i.id)} names={Object.fromEntries(all.map((i) => [i.id, i.email]))} onDone={() => { setPollKey((k) => k + 1); onChanged(); }} />}
       {msg && <p className="status err small">{msg}</p>}
       <div style={{ overflow: 'auto' }}>
         <table>
-          <thead><tr><th>Experto</th><th>Recibido</th><th>Cálculo</th><th>Excluido</th><th /></tr></thead>
+          <thead>
+            <tr>
+              <th>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  disabled={all.length === 0}
+                  onChange={() => setSelected(allSelected ? new Set() : new Set(all.map((i) => i.id)))}
+                  aria-label="Elegir todos"
+                />
+              </th>
+              <th>Experto</th><th>Recibido</th><th>Cálculos</th><th>Excluido</th>
+            </tr>
+          </thead>
           <tbody>
             {items === null && <tr><td colSpan="5" className="empty">Cargando…</td></tr>}
             {items !== null && items.length === 0 && <tr><td colSpan="5" className="empty">Aún no hay respuestas</td></tr>}
-            {(items || []).map((item) => {
-              const last = item.calculos[0];
-              return (
-                <tr key={item.id} className={item.excluido ? 'row-muted' : undefined}>
-                  <td>{item.email || `invitación ${item.invitation_id}`}</td>
-                  <td className="small">{fmtDate(item.created_at)}</td>
-                  <td>
-                    {last && (
-                      <Link to={`/fe/jobs/${last.job_id}`} className="small">
-                        <span className={`badge ${jobBadge(last.status)}`}>{last.status}</span> job <span className="mono">{last.job_id}</span>
-                      </Link>
-                    )}
-                    {!last && item.launch_error && <span className="badge error" title={item.launch_error}>no lanzado</span>}
-                    {!last && !item.launch_error && <span className="small muted">lanzando…</span>}
-                    {item.calculos.length > 1 && <div className="small muted">{item.calculos.length - 1} intentos anteriores</div>}
-                    {!last && item.launch_error && <div className="small status err">{item.launch_error}</div>}
-                  </td>
-                  <td>
-                    <input type="checkbox" checked={item.excluido} onChange={() => toggleExcluded(item)} aria-label="Excluir de los análisis conjuntos" />
-                  </td>
-                  <td>
-                    {canRetry(item) && (item.launch_error || last) && (
-                      <button type="button" className="btn" disabled={busyId === item.id} onClick={() => retry(item)}>
-                        {busyId === item.id ? 'Relanzando…' : 'Reintentar'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            {all.map((item) => (
+              <tr key={item.id} className={item.excluido ? 'row-muted' : undefined}>
+                <td>
+                  <input type="checkbox" checked={sel.has(item.id)} onChange={() => toggleSelected(item.id)} aria-label={`Elegir ${item.email || item.id}`} />
+                </td>
+                <td>{item.email || `invitación ${item.invitation_id}`}</td>
+                <td className="small">{fmtDate(item.created_at)}</td>
+                <td><ComputationList calculos={item.calculos} /></td>
+                <td>
+                  <input type="checkbox" checked={item.excluido} onChange={() => toggleExcluded(item)} aria-label="Excluir de los análisis conjuntos" />
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -446,8 +548,6 @@ export default function ProjectDetail() {
             {expert && <>
               <span>Causas ({project.causas.length})</span><span className="small">{project.causas.join(', ')}</span>
               <span>Efectos ({project.efectos.length})</span><span className="small">{project.efectos.join(', ')}</span>
-              <span>THR</span><span>{project.thr}</span>
-              <span>Orden máximo</span><span>{project.maxorder}</span>
             </>}
             <span>Creado</span><span className="small">{fmtDate(project.created_at)}</span>
           </div>

@@ -22,8 +22,8 @@ ProjectState = Literal["borrador", "abierto", "cerrado"]
 InvitationState = Literal["pendiente", "usada", "revocada", "expirada"]
 
 INITIAL_STATE: dict[str, ProjectState] = {"expertos": "borrador", "simulacion": "abierto"}
-# Transiciones permitidas por tipo (RF-09). Reabrir un proyecto cerrado no cambia sus etiquetas
-# ni parámetros, que quedaron fijos al abrirlo.
+# Transiciones permitidas por tipo (RF-09). Reabrir un proyecto cerrado no vuelve a borrador:
+# las etiquetas quedaron fijas al abrirlo.
 TRANSITIONS: dict[str, dict[str, set[str]]] = {
     "expertos": {"borrador": {"abierto"}, "abierto": {"cerrado"}, "cerrado": {"abierto"}},
     "simulacion": {"abierto": {"cerrado"}, "cerrado": {"abierto"}},
@@ -59,8 +59,6 @@ class Project:
     updated_at: datetime
     causas: list[str] = field(default_factory=list)
     efectos: list[str] = field(default_factory=list)
-    thr: float | None = None
-    maxorder: int | None = None
 
 
 @dataclass
@@ -95,7 +93,6 @@ class ExpertInput:
     ce: list[list[float]] = field(repr=False, default_factory=list)
     ee: list[list[float]] = field(repr=False, default_factory=list)
     excluido: bool = False
-    launch_error: str | None = None  # último error al lanzar el cálculo (no hay job en SLURM)
 
 
 def hash_token(token: str) -> str:
@@ -124,8 +121,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             owner TEXT,
             causas TEXT,
             efectos TEXT,
-            thr REAL,
-            maxorder INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -149,7 +144,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             ce TEXT NOT NULL,
             ee TEXT NOT NULL,
             excluido INTEGER NOT NULL DEFAULT 0,
-            launch_error TEXT,
             created_at TEXT NOT NULL
         );
         """
@@ -234,8 +228,6 @@ class ProjectStore:
             updated_at=_parse_dt(row["updated_at"]),
             causas=json.loads(row["causas"]) if row["causas"] else [],
             efectos=json.loads(row["efectos"]) if row["efectos"] else [],
-            thr=row["thr"],
-            maxorder=row["maxorder"],
         )
 
     @staticmethod
@@ -254,20 +246,18 @@ class ProjectStore:
         owner: str | None,
         causas: list[str] | None = None,
         efectos: list[str] | None = None,
-        thr: float | None = None,
-        maxorder: int | None = None,
     ) -> Project:
         now = datetime.now(UTC).isoformat()
 
         def fn(conn: sqlite3.Connection) -> Project:
             cur = conn.execute(
                 "INSERT INTO projects (nombre, descripcion, tipo, estado, owner, causas, efectos, "
-                "thr, maxorder, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     nombre, descripcion, tipo, INITIAL_STATE[tipo], owner,
                     json.dumps(causas or [], ensure_ascii=False),
                     json.dumps(efectos or [], ensure_ascii=False),
-                    thr, maxorder, now, now,
+                    now, now,
                 ),
             )
             conn.commit()
@@ -302,8 +292,8 @@ class ProjectStore:
         return await self._run(fn)
 
     async def update_project(self, project_id: int, **fields) -> Project:
-        """Actualiza los campos dados (nombre, descripcion, causas, efectos, thr, maxorder, estado)."""
-        allowed = {"nombre", "descripcion", "causas", "efectos", "thr", "maxorder", "estado"}
+        """Actualiza los campos dados (nombre, descripcion, causas, efectos, estado)."""
+        allowed = {"nombre", "descripcion", "causas", "efectos", "estado"}
         values = {k: v for k, v in fields.items() if k in allowed}
 
         def fn(conn: sqlite3.Connection) -> Project:
@@ -459,7 +449,6 @@ class ProjectStore:
             ce=json.loads(row["ce"]),
             ee=json.loads(row["ee"]),
             excluido=bool(row["excluido"]),
-            launch_error=row["launch_error"],
         )
 
     @staticmethod
@@ -527,13 +516,6 @@ class ProjectStore:
             return self._get_input(conn, project_id, input_id)
 
         return await self._run(fn)
-
-    async def set_launch_error(self, input_id: int, error: str | None) -> None:
-        def fn(conn: sqlite3.Connection) -> None:
-            conn.execute("UPDATE expert_inputs SET launch_error=? WHERE id=?", (error, input_id))
-            conn.commit()
-
-        await self._run(fn)
 
     async def count_inputs(self, project_id: int) -> int:
         def fn(conn: sqlite3.Connection) -> int:

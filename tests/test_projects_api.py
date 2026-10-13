@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -26,8 +27,6 @@ EXPERT_PROJECT = {
     "tipo": "expertos",
     "causas": ["a", "b"],
     "efectos": ["e1", "e2", "e3"],
-    "thr": 0.5,
-    "maxorder": 3,
 }
 
 
@@ -163,7 +162,7 @@ def _anon(client: TestClient) -> TestClient:
         ("post", "/app/projects/1/invitations/1/regenerate"),
         ("get", "/app/projects/1/inputs"),
         ("patch", "/app/projects/1/inputs/1"),
-        ("post", "/app/projects/1/inputs/1/retry"),
+        ("post", "/app/projects/1/compute"),
     ],
 )
 def test_project_routes_require_auth(client: TestClient, method: str, path: str) -> None:
@@ -176,11 +175,11 @@ def test_project_routes_require_auth(client: TestClient, method: str, path: str)
 def test_create_and_list_projects(env) -> None:
     client = env["client"]
     expert = _create(client)
-    sim = _create(client, nombre="Barridos", tipo="simulacion", causas=None, efectos=None, thr=None, maxorder=None)
+    sim = _create(client, nombre="Barridos", tipo="simulacion", causas=None, efectos=None)
 
     assert expert["estado"] == "borrador" and expert["transiciones"] == ["abierto"]
     assert expert["owner"] == TEST_USERNAME
-    assert sim["estado"] == "abierto" and sim["causas"] == [] and sim["thr"] is None
+    assert sim["estado"] == "abierto" and sim["causas"] == [] and "thr" not in sim
 
     listed = client.get("/app/projects").json()
     assert [p["id"] for p in listed] == [sim["id"], expert["id"]]
@@ -194,8 +193,6 @@ def test_create_and_list_projects(env) -> None:
         ({"efectos": ["a", "e2"]}, "causa y efecto: a"),
         ({"causas": ["a;b"]}, "no puede contener ';'"),
         ({"causas": [" "]}, "vacía"),
-        ({"thr": 1.5}, "less than or equal"),
-        ({"maxorder": 1}, "greater than or equal"),
         ({"tipo": "otro"}, "expertos"),
     ],
 )
@@ -210,13 +207,13 @@ def test_labels_editable_only_in_draft(env) -> None:
     project = _create(client)
     pid = project["id"]
 
-    res = client.patch(f"/app/projects/{pid}", json={"causas": ["c1", "c2"], "thr": 0.3})
+    res = client.patch(f"/app/projects/{pid}", json={"causas": ["c1", "c2"]})
     assert res.status_code == 200
-    assert res.json()["causas"] == ["c1", "c2"] and res.json()["thr"] == 0.3
+    assert res.json()["causas"] == ["c1", "c2"]
     assert client.patch(f"/app/projects/{pid}", json={"efectos": ["c1"]}).status_code == 422
 
     client.post(f"/app/projects/{pid}/estado", json={"estado": "abierto"})
-    assert client.patch(f"/app/projects/{pid}", json={"maxorder": 4}).status_code == 409
+    assert client.patch(f"/app/projects/{pid}", json={"causas": ["x"]}).status_code == 409
     res = client.patch(f"/app/projects/{pid}", json={"nombre": "Nuevo", "descripcion": "otra"})
     assert res.status_code == 200 and res.json()["nombre"] == "Nuevo"
 
@@ -371,7 +368,15 @@ def _submit(client: TestClient, token: str, **overrides):
     return client.post(f"/app/invite/{token}/submit", json={"cc": CC, "ce": CE, "ee": EE, **overrides})
 
 
-def test_expert_submission_launches_computation(env) -> None:
+def _login(client: TestClient) -> None:
+    client.post("/auth/login", json={"username": TEST_USERNAME, "password": TEST_PASSWORD})
+
+
+def _compute(client: TestClient, pid: int, **overrides):
+    return client.post(f"/app/projects/{pid}/compute", json={"thr": 0.5, "maxorder": 3, **overrides})
+
+
+def test_expert_submission_only_stores_input(env) -> None:
     client = env["client"]
     pid = _open_project(client)["id"]
     inv, token = _invite(client, pid)
@@ -382,29 +387,18 @@ def test_expert_submission_launches_computation(env) -> None:
     assert res.status_code == 200, res.text
     assert res.json() == {"received": True}  # el experto no ve resultados
     assert _submit(client, token).status_code == 410  # token de un solo uso
+    # El envío no lanza nada en el cluster: los cálculos los lanza el admin.
+    assert env["pool"].commands == [] and env["uploads"] == []
 
-    meta = json.loads(env["uploads"][0]["files"]["meta.json"])
-    assert meta == {"causes": ["a", "b"], "effects": ["e1", "e2", "e3"], "thr": 0.5, "maxorder": 3, "reps": 1}
-    sent_cc = np.load(__import__("io").BytesIO(env["uploads"][0]["files"]["CC.npy"]))
-    assert sent_cc.shape == (1, 2, 2) and sent_cc[0, 0, 1] == np.float32(0.2)
-
-    client.post("/auth/login", json={"username": TEST_USERNAME, "password": TEST_PASSWORD})
+    _login(client)
     inputs = client.get(f"/app/projects/{pid}/inputs").json()
     assert len(inputs) == 1
     item = inputs[0]
     assert item["email"] == "experta@example.com" and item["invitation_id"] == inv["id"]
-    assert item["launch_error"] is None and item["excluido"] is False
-    job_id = item["calculos"][0]["job_id"]
-    assert item["calculos"][0]["status"] == "pending"
-
-    job = client.get(f"/app/jobs/{job_id}").json()
-    assert job["project_id"] == pid and job["input_id"] == item["id"] and job["kind"] == "fe"
-    assert [j["job_id"] for j in client.get(f"/app/projects/{pid}/jobs").json()] == [job_id]
-    invitations = client.get(f"/app/projects/{pid}/invitations").json()
-    assert invitations[0]["estado"] == "usada"
-
-    # Un cálculo pendiente no se reintenta.
-    assert client.post(f"/app/projects/{pid}/inputs/{item['id']}/retry").status_code == 409
+    assert item["excluido"] is False and item["calculos"] == []
+    assert client.get(f"/app/projects/{pid}/invitations").json()[0]["estado"] == "usada"
+    stored = asyncio.run(env["projects"].get_input(pid, item["id"]))
+    assert stored.cc == [[1.0, pytest.approx(0.2)], [pytest.approx(0.3), 1.0]]
 
 
 def test_invalid_submission_keeps_token(env) -> None:
@@ -414,34 +408,78 @@ def test_invalid_submission_keeps_token(env) -> None:
 
     res = _submit(_anon(client), token, ce="x,e1\na,0.1\nb,0.2\n")
     assert res.status_code == 422 and res.json()["detail"]["valid"] is False
-    assert env["pool"].commands == []
     assert _anon(client).get(f"/app/invite/{token}").status_code == 200
 
 
-def test_launch_failure_is_saved_and_retried(env) -> None:
+def _project_with_inputs(env, n: int) -> tuple[int, list[int]]:
     client = env["client"]
     pid = _open_project(client)["id"]
-    _, token = _invite(client, pid)
+    for i in range(n):
+        _, token = _invite(client, pid, f"experto{i}@example.com")
+        assert _submit(_anon(client), token).status_code == 200
+        _login(client)
+    ids = [i["id"] for i in client.get(f"/app/projects/{pid}/inputs").json()]
+    return pid, ids
 
-    env["pool"].fail = True
-    assert _submit(_anon(client), token).status_code == 200  # el envío del experto se guarda igual
 
-    client.post("/auth/login", json={"username": TEST_USERNAME, "password": TEST_PASSWORD})
-    item = client.get(f"/app/projects/{pid}/inputs").json()[0]
-    assert item["calculos"] == [] and "No se pudo lanzar fe_job.sh" in item["launch_error"]
+def test_admin_launches_with_chosen_params(env) -> None:
+    client = env["client"]
+    pid, (id2, id1) = _project_with_inputs(env, 2)
 
-    res = client.post(f"/app/projects/{pid}/inputs/{item['id']}/retry")
+    res = _compute(client, pid, thr=0.3, maxorder=4)
     assert res.status_code == 200, res.text
-    item = client.get(f"/app/projects/{pid}/inputs").json()[0]
-    assert item["launch_error"] is None
-    assert [c["job_id"] for c in item["calculos"]] == [res.json()["job_id"]]
+    body = res.json()
+    assert body["errores"] == [] and {x["input_id"] for x in body["lanzados"]} == {id1, id2}
 
-    # Tras un error reportado por el cluster se puede reintentar: crea un cálculo nuevo.
-    asyncio.run(env["store"].update_from_callback(res.json()["job_id"], status="error", logs="boom"))
-    res2 = client.post(f"/app/projects/{pid}/inputs/{item['id']}/retry")
-    assert res2.status_code == 200
-    item = client.get(f"/app/projects/{pid}/inputs").json()[0]
-    assert [c["job_id"] for c in item["calculos"]] == [res2.json()["job_id"], res.json()["job_id"]]
+    meta = json.loads(env["uploads"][0]["files"]["meta.json"])
+    assert meta == {"causes": ["a", "b"], "effects": ["e1", "e2", "e3"], "thr": 0.3, "maxorder": 4, "reps": 1}
+    sent_cc = np.load(io.BytesIO(env["uploads"][0]["files"]["CC.npy"]))
+    assert sent_cc.shape == (1, 2, 2)
+
+    job_id = body["lanzados"][0]["job_id"]
+    job = client.get(f"/app/jobs/{job_id}").json()
+    assert job["project_id"] == pid and job["kind"] == "fe" and job["params"]["thr"] == 0.3
+
+    # Otro cálculo del mismo input con otros parámetros: se acumulan.
+    res = _compute(client, pid, thr=0.7, maxorder=2, input_ids=[id1])
+    assert [x["input_id"] for x in res.json()["lanzados"]] == [id1]
+    item = next(i for i in client.get(f"/app/projects/{pid}/inputs").json() if i["id"] == id1)
+    assert [(c["thr"], c["maxorder"]) for c in item["calculos"]] == [(0.7, 2), (0.3, 4)]
+
+
+def test_compute_skips_excluded_and_validates(env) -> None:
+    client = env["client"]
+    pid, (id2, id1) = _project_with_inputs(env, 2)
+    client.patch(f"/app/projects/{pid}/inputs/{id2}", json={"excluido": True})
+
+    res = _compute(client, pid)
+    assert [x["input_id"] for x in res.json()["lanzados"]] == [id1]
+    # Elegido explícitamente, un input excluido sí se calcula.
+    assert _compute(client, pid, input_ids=[id2]).status_code == 200
+    assert _compute(client, pid, input_ids=[999]).status_code == 404
+    assert _compute(client, pid, thr=1.5).status_code == 422
+    assert _compute(client, pid, maxorder=1).status_code == 422
+
+    client.patch(f"/app/projects/{pid}/inputs/{id1}", json={"excluido": True})
+    client.patch(f"/app/projects/{pid}/inputs/{id2}", json={"excluido": True})
+    assert _compute(client, pid).status_code == 400  # nada que calcular
+
+    sim = _create(client, tipo="simulacion")
+    assert _compute(client, sim["id"]).status_code == 400
+
+
+def test_launch_failure_is_reported_per_input(env) -> None:
+    client = env["client"]
+    pid, _ = _project_with_inputs(env, 2)
+
+    env["pool"].fail = True  # falla el primer sbatch; el segundo input se lanza igual
+    body = _compute(client, pid).json()
+    assert len(body["lanzados"]) == 1 and len(body["errores"]) == 1
+    failed = body["errores"][0]["input_id"]
+    assert "No se pudo lanzar fe_job.sh" in body["errores"][0]["detail"]
+
+    # Reintentar es lanzar de nuevo ese input.
+    assert _compute(client, pid, input_ids=[failed]).json()["errores"] == []
 
 
 def test_exclude_input(env) -> None:

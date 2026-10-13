@@ -72,12 +72,13 @@ def _clean_labels(labels: list[str] | None, side: str) -> list[str] | None:
 
 
 class ExpertParams(BaseModel):
-    """Etiquetas y parámetros de cálculo de un proyecto de expertos (RF-08)."""
+    """Etiquetas de causas y efectos de un proyecto de expertos (RF-08).
+
+    THR y el orden máximo no son del proyecto: el admin los indica al lanzar cada cálculo.
+    """
 
     causas: list[str] | None = None
     efectos: list[str] | None = None
-    thr: float | None = Field(default=None, ge=0, le=1)
-    maxorder: int | None = Field(default=None, ge=2, le=10)
 
     @field_validator("causas")
     @classmethod
@@ -106,7 +107,7 @@ class ProjectCreate(ExpertParams):
     @model_validator(mode="after")
     def _expert_fields(self):
         if self.tipo == "expertos":
-            missing = [k for k in ("causas", "efectos", "thr", "maxorder") if getattr(self, k) is None]
+            missing = [k for k in ("causas", "efectos") if getattr(self, k) is None]
             if missing:
                 raise ValueError(f"Un proyecto de expertos requiere: {', '.join(missing)}")
         return self
@@ -132,8 +133,6 @@ class ProjectOut(BaseModel):
     updated_at: datetime
     causas: list[str]
     efectos: list[str]
-    thr: float | None
-    maxorder: int | None
     transiciones: list[str]  # estados a los que se puede pasar desde el actual
     conteos: dict[str, int] = {}
 
@@ -142,7 +141,7 @@ class ProjectOut(BaseModel):
         return cls(
             **{k: getattr(p, k) for k in (
                 "id", "nombre", "descripcion", "tipo", "estado", "owner", "created_at",
-                "updated_at", "causas", "efectos", "thr", "maxorder",
+                "updated_at", "causas", "efectos",
             )},
             transiciones=sorted(TRANSITIONS[p.tipo].get(p.estado, set())),
             conteos=conteos or {},
@@ -185,6 +184,8 @@ class ComputationOut(BaseModel):
     status: str
     node: str
     created_at: datetime
+    thr: float | None = None
+    maxorder: int | None = None
 
 
 class InputOut(BaseModel):
@@ -193,7 +194,6 @@ class InputOut(BaseModel):
     email: str | None
     created_at: datetime
     excluido: bool
-    launch_error: str | None
     calculos: list[ComputationOut]  # del más reciente al más antiguo
 
 
@@ -201,9 +201,31 @@ class InputUpdate(BaseModel):
     excluido: bool
 
 
-class RetryOut(BaseModel):
+class ComputeRequest(BaseModel):
+    """Cálculo por experto con los parámetros que elige el admin (RF-21)."""
+
+    thr: float = Field(..., ge=0, le=1, description="Threshold de forgeffects")
+    maxorder: int = Field(..., ge=2, le=10, description="Orden máximo de los caminos")
+    nodo: str | None = Field(default=None, description="Nodo objetivo; si se omite, se elige automáticamente")
+    input_ids: list[int] | None = Field(
+        default=None, description="Inputs a calcular; si se omite, todos los no excluidos"
+    )
+
+
+class LaunchedOut(BaseModel):
+    input_id: int
     job_id: str
     node: str
+
+
+class LaunchErrorOut(BaseModel):
+    input_id: int
+    detail: str
+
+
+class ComputeResponse(BaseModel):
+    lanzados: list[LaunchedOut]
+    errores: list[LaunchErrorOut]
 
 
 # --- helpers ---------------------------------------------------------------------------------
@@ -258,28 +280,22 @@ async def launch_expert_computation(
     *,
     project: Project,
     item: ExpertInput,
+    thr: float,
+    maxorder: int,
+    nodo: str | None,
     pool: SSHConnectionPool,
     selector: NodeSelector,
     store: JobStore,
-    projects: ProjectStore,
     settings: Settings,
 ) -> tuple[str, str]:
-    """Lanza forgeffects sobre el input de un experto (RF-21) en el nodo que elige el selector.
-
-    Si falla, deja el error en el input (RF-23) y relanza la HTTPException.
-    """
+    """Lanza forgeffects sobre el input de un experto (RF-21). Lanza HTTPException si falla."""
     cc, ce, ee = input_matrices(item)
-    try:
-        node = await resolve_node(None, pool, selector)
-        job_id = await launch_fe_job(
-            pool=pool, store=store, settings=settings, node=node, cc=cc, ce=ce, ee=ee,
-            causes=project.causas, effects=project.efectos, thr=project.thr, maxorder=project.maxorder,
-            project_id=project.id, input_id=item.id,
-        )
-    except HTTPException as e:
-        await projects.set_launch_error(item.id, str(e.detail))
-        raise
-    await projects.set_launch_error(item.id, None)
+    node = await resolve_node(nodo, pool, selector)
+    job_id = await launch_fe_job(
+        pool=pool, store=store, settings=settings, node=node, cc=cc, ce=ce, ee=ee,
+        causes=project.causas, effects=project.efectos, thr=thr, maxorder=maxorder,
+        project_id=project.id, input_id=item.id,
+    )
     return job_id, node
 
 
@@ -309,8 +325,6 @@ async def create_project(
         owner=user,
         causas=body.causas if expert else None,
         efectos=body.efectos if expert else None,
-        thr=body.thr if expert else None,
-        maxorder=body.maxorder if expert else None,
     )
     return ProjectOut.from_project(project)
 
@@ -336,13 +350,13 @@ async def update_project(
     """Nombre y descripción se editan siempre; etiquetas y parámetros solo en borrador (RF-09)."""
     project = await get_project_or_404(project_id, projects)
     fields = body.model_dump(exclude_unset=True, exclude_none=True)
-    expert_fields = {k for k in fields if k in ("causas", "efectos", "thr", "maxorder")}
+    expert_fields = {k for k in fields if k in ("causas", "efectos")}
     if expert_fields:
         _require_expertos(project)
         if project.estado != "borrador":
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
-                "Las etiquetas y los parámetros solo se pueden editar en borrador",
+                "Las etiquetas solo se pueden editar en borrador",
             )
         causas = fields.get("causas", project.causas)
         efectos = fields.get("efectos", project.efectos)
@@ -493,9 +507,11 @@ def _input_out(item: ExpertInput, email: str | None, jobs: list[JobRecord]) -> I
         email=email,
         created_at=item.created_at,
         excluido=item.excluido,
-        launch_error=item.launch_error,
         calculos=[
-            ComputationOut(job_id=j.job_id, status=j.status, node=j.node, created_at=j.created_at)
+            ComputationOut(
+                job_id=j.job_id, status=j.status, node=j.node, created_at=j.created_at,
+                thr=(j.params or {}).get("thr"), maxorder=(j.params or {}).get("maxorder"),
+            )
             for j in jobs
         ],
     )
@@ -540,33 +556,49 @@ async def update_input(
     return _input_out(item, inv.email, jobs)
 
 
-@router.post("/{project_id}/inputs/{input_id}/retry", response_model=RetryOut)
-async def retry_input(
+@router.post("/{project_id}/compute", response_model=ComputeResponse)
+async def compute_inputs(
     project_id: int,
-    input_id: int,
+    body: ComputeRequest,
     user: Annotated[str, Depends(require_user)],
     settings: Annotated[Settings, Depends(get_settings)],
     projects: Annotated[ProjectStore, Depends(get_project_store)],
     store: Annotated[JobStore, Depends(get_job_store)],
     pool: Annotated[SSHConnectionPool, Depends(get_ssh_pool)],
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
-) -> RetryOut:
-    """Nuevo cálculo con el mismo input, si el último falló o no se pudo lanzar (RF-23)."""
+) -> ComputeResponse:
+    """Lanza un cálculo por experto con el THR y el orden máximo indicados (RF-21).
+
+    Cada input puede tener varios cálculos con distintos parámetros. Si un lanzamiento falla,
+    los demás siguen y el error se informa en `errores` (RF-23: se reintenta lanzando de nuevo).
+    """
     project = await get_project_or_404(project_id, projects)
     _require_expertos(project)
-    try:
-        item = await projects.get_input(project_id, input_id)
-    except InputNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Input {input_id} no existe")
-    jobs = [j for j in await store.list_by_project(project_id) if j.input_id == item.id]
-    if jobs and jobs[0].status in ("pending", "success"):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"El último cálculo de este input está en estado {jobs[0].status}",
-        )
-    job_id, node = await launch_expert_computation(
-        project=project, item=item, pool=pool, selector=selector, store=store,
-        projects=projects, settings=settings,
-    )
-    return RetryOut(job_id=job_id, node=node)
+    inputs = await projects.list_inputs(project_id)
+    if body.input_ids is None:
+        selected = [i for i in inputs if not i.excluido]
+    else:
+        by_id = {i.id: i for i in inputs}
+        unknown = [i for i in body.input_ids if i not in by_id]
+        if unknown:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, f"Inputs inexistentes: {', '.join(map(str, unknown))}"
+            )
+        selected = [by_id[i] for i in dict.fromkeys(body.input_ids)]
+    if not selected:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No hay inputs para calcular")
 
+    lanzados: list[LaunchedOut] = []
+    errores: list[LaunchErrorOut] = []
+    for item in selected:
+        try:
+            job_id, node = await launch_expert_computation(
+                project=project, item=item, thr=body.thr, maxorder=body.maxorder, nodo=body.nodo,
+                pool=pool, selector=selector, store=store, settings=settings,
+            )
+        except HTTPException as e:
+            logger.warning("No se pudo lanzar el cálculo del input %s: %s", item.id, e.detail)
+            errores.append(LaunchErrorOut(input_id=item.id, detail=str(e.detail)))
+            continue
+        lanzados.append(LaunchedOut(input_id=item.id, job_id=job_id, node=node))
+    return ComputeResponse(lanzados=lanzados, errores=errores)

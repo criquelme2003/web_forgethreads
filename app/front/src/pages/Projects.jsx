@@ -17,7 +17,7 @@ export function fmtDate(iso) {
   }
 }
 
-/** Campos de un proyecto de expertos: etiquetas, THR y orden máximo (RF-08). */
+/** Etiquetas de un proyecto de expertos (RF-08). THR y orden máximo se eligen al lanzar cada cálculo. */
 export function ExpertFields({ value, onChange, disabled }) {
   const set = (key) => (e) => onChange({ ...value, [key]: e.target.value });
   return (
@@ -32,18 +32,6 @@ export function ExpertFields({ value, onChange, disabled }) {
           <textarea id="efectos" rows={6} placeholder={'Una por línea, ej.\nVentas\nCostos'} value={value.efectos} onChange={set('efectos')} disabled={disabled} />
         </div>
       </div>
-      <div className="grid-2">
-        <div className="field">
-          <label htmlFor="thr">THR</label>
-          <input id="thr" type="number" step="any" min="0" max="1" value={value.thr} onChange={set('thr')} disabled={disabled} />
-          <div className="hint">Umbral en [0,1]</div>
-        </div>
-        <div className="field">
-          <label htmlFor="maxorder">Orden máximo</label>
-          <input id="maxorder" type="number" step="1" min="2" max="10" value={value.maxorder} onChange={set('maxorder')} disabled={disabled} />
-          <div className="hint">Entero entre 2 y 10</div>
-        </div>
-      </div>
     </>
   );
 }
@@ -52,8 +40,6 @@ export function expertPayload(value) {
   return {
     causas: parseLabels(value.causas),
     efectos: parseLabels(value.efectos),
-    thr: parseFloat(value.thr),
-    maxorder: parseInt(value.maxorder, 10),
   };
 }
 
@@ -62,7 +48,7 @@ function CreateProject({ onCancel }) {
   const [nombre, setNombre] = useState('');
   const [descripcion, setDescripcion] = useState('');
   const [tipo, setTipo] = useState('expertos');
-  const [expert, setExpert] = useState({ causas: '', efectos: '', thr: '0.5', maxorder: '3' });
+  const [expert, setExpert] = useState({ causas: '', efectos: '' });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
@@ -115,7 +101,7 @@ function CreateProject({ onCancel }) {
         {tipo === 'expertos' && <ExpertFields value={expert} onChange={setExpert} />}
         {tipo === 'expertos' && (
           <p className="small muted" style={{ margin: 0 }}>
-            El proyecto parte en <strong>borrador</strong>: las etiquetas y los parámetros se pueden editar hasta abrirlo a los expertos.
+            El proyecto parte en <strong>borrador</strong>: las etiquetas se pueden editar hasta abrirlo a los expertos. THR y orden máximo se eligen al lanzar cada cálculo.
           </p>
         )}
         <div className="actions">

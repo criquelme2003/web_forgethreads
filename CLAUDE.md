@@ -39,10 +39,11 @@ uv run uvicorn app.main:app --reload            # servidor local
 
 ### Proyectos
 
-- Tipos `expertos` (estados `borrador → abierto → cerrado`, reabrible) y `simulacion` (`abierto ↔ cerrado`). Las etiquetas, `thr` y `maxorder` solo se editan en `borrador`.
+- Tipos `expertos` (estados `borrador → abierto → cerrado`, reabrible) y `simulacion` (`abierto ↔ cerrado`). Las etiquetas solo se editan en `borrador`. El proyecto no tiene `thr` ni `maxorder`: se indican en cada lanzamiento.
 - Los cálculos de un proyecto son filas de `jobs` con `project_id` (e `input_id` si vienen de un experto). `POST /app/execute_maxmin` exige `project_id` de un proyecto de simulación abierto.
 - Invitaciones: token de un solo uso, solo se guarda su hash; el enlace (`/front/invite/<token>`) se muestra al crear o regenerar. Con `INVITATION_DELIVERY=smtp` además se envía por correo (puerto 465 = SSL implícito).
-- `/app/invite/{token}` es público (sin sesión): info, validación contra las etiquetas del proyecto y envío. El envío consume el token en la misma transacción que guarda el input y lanza `fe_job.sh` en segundo plano; si el lanzamiento falla queda `launch_error` en el input y el admin reintenta con `POST .../inputs/{id}/retry`.
+- `/app/invite/{token}` es público (sin sesión): info, validación contra las etiquetas del proyecto y envío. El envío consume el token en la misma transacción que guarda el input (matrices normalizadas en `expert_inputs`); no lanza nada en el cluster.
+- `POST /app/projects/{id}/compute` (`thr`, `maxorder`, `nodo?`, `input_ids?`; por defecto los no excluidos) lanza un `fe_job.sh` por input. Los errores de lanzamiento se devuelven por input; reintentar es volver a lanzar.
 - Al abrir la base, los jobs MaxMin sin proyecto se mueven a un proyecto de simulación «MaxMin (jobs anteriores)».
 
 El contrato con el cluster está en el README de [scripts_wf](https://github.com/criquelme2003/scripts_wf).
