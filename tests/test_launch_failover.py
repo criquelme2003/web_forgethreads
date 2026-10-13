@@ -253,3 +253,26 @@ def test_no_candidates(ctx) -> None:
     with pytest.raises(HTTPException) as exc:
         _submit(ctx, FakePool())
     assert exc.value.status_code == 502 and "cuda1: down" in exc.value.detail
+
+
+def test_cluster_status_shows_slurm_reason(client, monkeypatch) -> None:
+    from app.api.deps import get_node_selector
+    from app.main import app
+    from tests.conftest import TEST_PASSWORD, TEST_USERNAME
+
+    drained = _status("cuda1", NodeState.DRAIN)
+    drained.reason = "mantencion GPU [root@2026-10-13T10:00:00]"
+
+    class Selector:
+        async def get_all_status(self, force_refresh: bool = False):
+            return [drained, _status("cuda2")]
+
+        def score(self, s):
+            return NodeSelector.score(NodeSelector(pool=None), s)  # type: ignore[arg-type]
+
+    app.dependency_overrides[get_node_selector] = lambda: Selector()
+    client.post("/auth/login", json={"username": TEST_USERNAME, "password": TEST_PASSWORD})
+    rows = {r["name"]: r for r in client.get("/app/cluster_status").json()["rows"]}
+
+    assert rows["cuda1"]["reason"] == "mantencion GPU [root@2026-10-13T10:00:00]"
+    assert rows["cuda1"]["state"] == "drain" and rows["cuda2"]["reason"] is None
