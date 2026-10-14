@@ -160,9 +160,7 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
               aria-pressed={!off}
               onClick={() => toggle(item)}
             >
-              {view !== 'chord' && (
-                <svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" rx="2" fill={item.color} /></svg>
-              )}
+
               {item.key}
             </button>
           );
@@ -178,14 +176,21 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
             </span>
           </span>
         )}
-        <span className="pv-kind-legend small muted">
-          <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#4b5563" /></svg>Causa</span>
-          <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#9ca3af" /></svg>Efecto</span>
-        </span>
+        {view === 'chord' ? (
+          <span className="pv-kind-legend small muted">
+            <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#4b5563" /></svg>Causa</span>
+            <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#9ca3af" /></svg>Efecto</span>
+          </span>
+        ) : (
+          <span className="pv-kind-legend small muted">
+            <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="#4b5563" /></svg>Causa</span>
+            <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="3.5" fill="none" stroke="#4b5563" strokeWidth="1.5" /></svg>Efecto</span>
+          </span>
+        )}
         <span className="small muted">
           {view === 'chord'
             ? `cada camino recorre sus intermedios, de claro (sale del origen) a oscuro (llega al destino) · ancho = suma de ${metric} · pasa el cursor para ver un camino completo · clic en un nodo para filtrar por ese origen`
-            : `más oscuro = más indirecto · grosor = ${metric} · clic en un origen para filtrar`}
+            : `un eje por posición en el camino (color = eje) · grosor = ${metric} · lo más brillante es lo más recorrido · pasa el cursor para ver un camino completo · clic en un origen para filtrar`}
         </span>
       </div>
       <VizErrorBoundary resetKey={`${view}|${origin}|${top}|${metric}|${[...visibleOrders].join(',')}`}>

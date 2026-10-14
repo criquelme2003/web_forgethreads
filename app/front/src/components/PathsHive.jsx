@@ -1,15 +1,23 @@
 import { useMemo, useRef, useState } from 'react';
-import { fmtValue, maxValue, orderColor, orderLabels, pathLabel, useWidth } from './pathsModel.js';
+import { fmtValue, maxValue, orderLabels, pathLabel, useWidth } from './pathsModel.js';
 
 /**
  * Hive plot de efectos olvidados con un eje por posición en el camino: Origen (From),
- * Intermedio 1, Intermedio 2, … (Through_1, Through_2, …) y Destino (To). Separar los
- * intermedios por posición evita que un solo eje central concentre todos los nodos, y un camino
- * nunca vuelve a un eje: avanza en sentido horario de Origen a Destino. Coloreado por orden.
+ * Intermedio 1..k (Through_1..k) y Destino (To), con k = orden máximo − 1. Separar los
+ * intermedios por posición evita que un solo eje central concentre todos los nodos.
+ *
+ * Estilo de "esfera": panel oscuro, tramos finos en blanco translúcido que se curvan por fuera
+ * de los ejes (los caminos frecuentes se ven más brillantes al superponerse) y nodos coloreados
+ * por eje con la paleta categórica validada para fondo oscuro (causa = punto relleno,
+ * efecto = anillo). Al pasar el cursor, el camino completo se ilumina.
  * Clic en un nodo del eje Origen: filtra por ese origen (otro clic lo quita).
  */
 
-const INNER = 34;
+const INNER = 26;
+// Paleta categórica del modo oscuro (validada, parejas contiguas). Más de 8 ejes: gris.
+const AXIS_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
+const AXIS_OVERFLOW = '#8a8a85';
+const BULGE = 1.18; // los tramos se curvan hasta ~18% más allá del radio de los ejes
 const SIDE_BEND = 0.38; // rad: desvío si un tramo uniera dos nodos del mismo eje (no debería pasar)
 
 /**
@@ -30,6 +38,7 @@ function buildAxes(throughCount) {
   return keys.map((a, i) => ({
     ...a,
     angle: (((180 + step / 2 + i * step) % 360) * Math.PI) / 180,
+    color: AXIS_COLORS[i] || AXIS_OVERFLOW,
   }));
 }
 
@@ -37,29 +46,36 @@ function polar(angle, r) {
   return [r * Math.sin(angle), -r * Math.cos(angle)];
 }
 
-function midAngle(a1, a2) {
-  let d = a2 - a1;
+/**
+ * Tramo entre dos puntos (eje, radio): curva cúbica que sale hacia afuera, tanto más cuanto
+ * más separados están los ejes (los que saltan ejes rodean el círculo por fuera, sin cruzar
+ * el centro). La curva queda dentro de BULGE·R porque no supera a sus puntos de control.
+ */
+function segment(a, b, R) {
+  const [x2, y2] = polar(b.angle, b.r);
+  let d = b.angle - a.angle;
   if (d > Math.PI) d -= 2 * Math.PI;
   if (d < -Math.PI) d += 2 * Math.PI;
-  return a1 + d / 2;
-}
-
-/** Tramo entre dos puntos (eje, radio): curva cúbica clásica de hive plot. */
-function segment(a, b) {
-  const [x2, y2] = polar(b.angle, b.r);
-  if (a.angle === b.angle) {
+  if (d === 0) {
     const [c1x, c1y] = polar(a.angle + SIDE_BEND, a.r + 6);
     const [c2x, c2y] = polar(b.angle + SIDE_BEND, b.r + 6);
     return `C${c1x},${c1y} ${c2x},${c2y} ${x2},${y2}`;
   }
-  const m = midAngle(a.angle, b.angle);
-  const [c1x, c1y] = polar(m, a.r);
-  const [c2x, c2y] = polar(m, b.r);
+  // Más curvatura cuanto más separados los ejes y más lejos del centro los nodos: los tramos
+  // cercanos al centro hacen arcos suaves y los exteriores rodean el círculo.
+  const rMax = Math.max(a.r, b.r);
+  const f = Math.min(1, Math.abs(d) / Math.PI) * (0.35 + 0.65 * (rMax / R));
+  const rc = rMax + (BULGE * R - rMax) * f;
+  const [c1x, c1y] = polar(a.angle + d / 3, (rc + a.r) / 2 + (rc - a.r) * 0.25);
+  const [c2x, c2y] = polar(a.angle + (2 * d) / 3, (rc + b.r) / 2 + (rc - b.r) * 0.25);
   return `C${c1x},${c1y} ${c2x},${c2y} ${x2},${y2}`;
 }
 
-function buildLayout(paths, causes, effects, R) {
-  const throughCount = paths.reduce((m, p) => Math.max(m, p.through.length), 0);
+function buildLayout(paths, orders, causes, effects, R) {
+  // Ejes según el orden máximo del job (no solo de los caminos visibles): no cambian al ocultar
+  // órdenes en la leyenda.
+  const fromOrders = orders && orders.length ? Math.max(...orders) - 1 : 0;
+  const throughCount = Math.max(fromOrders, paths.reduce((m, p) => Math.max(m, p.through.length), 0));
   const axes = buildAxes(throughCount);
   const used = Object.fromEntries(axes.map((a) => [a.key, new Set()]));
   for (const p of paths) {
@@ -77,7 +93,7 @@ function buildLayout(paths, causes, effects, R) {
     labels.forEach((label, i) => {
       const r = INNER + ((i + 0.5) / labels.length) * (R - INNER);
       const kind = causes.includes(label) ? 'cause' : effects.includes(label) ? 'effect' : 'other';
-      const node = { id: `${axis.key}:${label}`, axis: axis.key, label, kind, angle: axis.angle, r };
+      const node = { id: `${axis.key}:${label}`, axis: axis.key, label, kind, angle: axis.angle, r, color: axis.color };
       pos[axis.key].set(label, node);
       nodes.push(node);
     });
@@ -87,8 +103,8 @@ function buildLayout(paths, causes, effects, R) {
     const points = [pos.origin.get(p.from), ...p.through.map((t, i) => pos[`t${i + 1}`].get(t)), pos.dest.get(p.to)];
     const [x0, y0] = polar(points[0].angle, points[0].r);
     let d = `M${x0},${y0}`;
-    for (let i = 1; i < points.length; i += 1) d += segment(points[i - 1], points[i]);
-    return { ...p, d, nodeIds: new Set(points.map((n) => n.id)), width: max ? 1 + (p.value / max) * 3 : 1.5 };
+    for (let i = 1; i < points.length; i += 1) d += segment(points[i - 1], points[i], R);
+    return { ...p, d, nodeIds: new Set(points.map((n) => n.id)), width: max ? 0.6 + (p.value / max) * 2 : 1 };
   });
   // Los más intensos al final, para que queden encima.
   lines.sort((a, b) => a.value - b.value);
@@ -101,12 +117,14 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
   const [hover, setHover] = useState(null); // { kind: 'line'|'node', id, tip }
 
   const size = Math.max(320, Math.min(width || 760, 760));
-  const R = size / 2 - 90;
-  const layout = useMemo(() => (paths.length ? buildLayout(paths, causes, effects, R) : null), [paths, causes, effects, R]);
-  // Alto según hasta dónde suben y bajan los ejes (con 3 ejes, los de abajo solo bajan R/2).
-  const ys = layout ? layout.axes.map((a) => -Math.cos(a.angle) * R) : [-R, R];
-  const top = Math.min(...ys) - 44;
-  const height = Math.max(...ys) + 44 - top;
+  // Los tramos llegan hasta BULGE·R; se deja aire para los títulos de los ejes.
+  const R = (size / 2 - 64) / BULGE;
+  const layout = useMemo(
+    () => (paths.length ? buildLayout(paths, orders, causes, effects, R) : null),
+    [paths, orders, causes, effects, R],
+  );
+  // Opacidad base: con más caminos, cada uno más tenue (la superposición marca lo frecuente).
+  const baseOpacity = Math.min(0.55, 4 / Math.sqrt(Math.max(paths.length, 1)));
 
   const lit = (line) => !hover || (hover.kind === 'line' ? hover.id === line.id : line.nodeIds.has(hover.id));
 
@@ -141,24 +159,29 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
   if (!layout) return <div className="empty" ref={wrapRef}>Sin caminos para dibujar</div>;
 
   return (
-    <div className="paths-viz" ref={wrapRef}>
+    <div className="paths-viz hive-panel" ref={wrapRef}>
       <svg
         width={size}
-        height={height}
-        viewBox={`${-size / 2} ${top} ${size} ${height}`}
+        height={size}
+        viewBox={`${-size / 2} ${-size / 2} ${size} ${size}`}
         role="img"
         aria-label={`Hive plot de ${paths.length} caminos: ejes ${layout.axes.map((a) => a.title).join(', ')}`}
         onPointerLeave={() => setHover(null)}
         style={{ display: 'block', margin: '0 auto' }}
       >
         {layout.axes.map((a) => {
-          const [x1, y1] = polar(a.angle, INNER - 8);
-          const [x2, y2] = polar(a.angle, R + 8);
-          const [tx, ty] = polar(a.angle, R + 26);
+          const [x1, y1] = polar(a.angle, 4);
+          const [x2, y2] = polar(a.angle, R + 6);
+          const [tx, ty] = polar(a.angle, R + 20);
+          const deg = (a.angle * 180) / Math.PI;
+          const anchor = Math.abs(Math.sin(a.angle)) < 0.2 ? 'middle' : Math.sin(a.angle) > 0 ? 'start' : 'end';
           return (
             <g key={a.key}>
-              <line x1={x1} y1={y1} x2={x2} y2={y2} className="pv-axis" />
-              <text x={tx} y={ty} dy="0.35em" textAnchor="middle" className="pv-axis-title">{a.title}</text>
+              <line x1={x1} y1={y1} x2={x2} y2={y2} className="hv-axis" />
+              <g transform={`translate(${tx},${ty})`}>
+                <circle r={4} fill={a.color} cx={anchor === 'end' ? 6 : anchor === 'start' ? -6 : 0} cy={anchor === 'middle' ? (deg > 90 && deg < 270 ? -10 : 10) : 0} />
+                <text dy="0.35em" textAnchor={anchor} className="hv-axis-title">{a.title}</text>
+              </g>
             </g>
           );
         })}
@@ -169,9 +192,9 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
               <g key={line.id}>
                 <path
                   d={line.d}
-                  stroke={orderColor(line.order, orders)}
-                  strokeWidth={line.width}
-                  strokeOpacity={hover ? (on ? 0.95 : 0.06) : 0.55}
+                  stroke="#f0efec"
+                  strokeWidth={hover && on ? line.width + 0.6 : line.width}
+                  strokeOpacity={hover ? (on ? 0.95 : 0.03) : baseOpacity}
                   strokeLinecap="round"
                 />
                 <path
@@ -191,7 +214,7 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
           const deg = (n.angle * 180) / Math.PI;
           const flip = deg > 90 && deg < 270;
           const active = n.axis === 'origin' && origin === n.label;
-          const dim = hover && hover.kind === 'node' && hover.id !== n.id;
+          const dim = hover && !layout.lines.some((l) => lit(l) && l.nodeIds.has(n.id));
           return (
             <g
               key={n.id}
@@ -199,7 +222,7 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
               tabIndex={0}
               role={n.axis === 'origin' ? 'button' : undefined}
               aria-label={`${layout.axisByKey[n.axis].title}: ${n.label}`}
-              opacity={dim ? 0.45 : 1}
+              opacity={dim ? 0.3 : 1}
               onPointerMove={(e) => show(e, 'node', n.id, nodeTip(n))}
               onFocus={(e) => show(e, 'node', n.id, nodeTip(n))}
               onBlur={() => setHover(null)}
@@ -207,13 +230,21 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleOrigin(n); } }}
             >
               <circle cx={x} cy={y} r={11} fill="transparent" />
-              <circle cx={x} cy={y} r={active ? 6 : 4.5} className={`pv-dot ${n.kind}${active ? ' is-active' : ''}`} />
+              {/* Causa: punto relleno; efecto: anillo (la forma no depende del color). */}
+              <circle
+                cx={x}
+                cy={y}
+                r={active ? 6 : 4.5}
+                fill={n.kind === 'effect' ? '#1a1a19' : n.color}
+                stroke={active ? '#f0efec' : n.color}
+                strokeWidth={n.kind === 'effect' || active ? 2 : 0}
+              />
               <text
                 transform={`translate(${x},${y}) rotate(${flip ? deg + 180 : deg})`}
                 x={flip ? -9 : 9}
                 dy="0.35em"
                 textAnchor={flip ? 'end' : 'start'}
-                className={`pv-label${active ? ' is-active' : ''}`}
+                className={`hv-label${active ? ' is-active' : ''}`}
               >
                 {n.label}
               </text>
