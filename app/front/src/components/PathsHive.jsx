@@ -50,9 +50,11 @@ function buildLayout(paths, causes, effects, R) {
     used.dest.add(p.to);
   }
   const ordered = {
-    origin: orderLabels(used.origin, causes),
+    // Un camino puede empezar o terminar en cualquier nodo: los tres ejes usan el mismo orden
+    // (causas y luego efectos del proyecto).
+    origin: orderLabels(used.origin, [...causes, ...effects]),
     through: orderLabels(used.through, [...causes, ...effects]),
-    dest: orderLabels(used.dest, effects),
+    dest: orderLabels(used.dest, [...causes, ...effects]),
   };
   const nodes = [];
   const pos = {};
@@ -61,7 +63,8 @@ function buildLayout(paths, causes, effects, R) {
     pos[axis.key] = new Map();
     labels.forEach((label, i) => {
       const r = INNER + ((i + 0.5) / labels.length) * (R - INNER);
-      const node = { id: `${axis.key}:${label}`, axis: axis.key, label, angle: axis.angle, r };
+      const kind = causes.includes(label) ? 'cause' : effects.includes(label) ? 'effect' : 'other';
+      const node = { id: `${axis.key}:${label}`, axis: axis.key, label, kind, angle: axis.angle, r };
       pos[axis.key].set(label, node);
       nodes.push(node);
     });
@@ -187,7 +190,7 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleOrigin(n); } }}
             >
               <circle cx={x} cy={y} r={11} fill="transparent" />
-              <circle cx={x} cy={y} r={active ? 6 : 4.5} className={`pv-dot${active ? ' is-active' : ''}`} />
+              <circle cx={x} cy={y} r={active ? 6 : 4.5} className={`pv-dot ${n.kind}${active ? ' is-active' : ''}`} />
               <text x={x + (right ? 9 : -9)} y={y} dy="0.35em" textAnchor={right ? 'start' : 'end'} className={`pv-label${active ? ' is-active' : ''}`}>
                 {n.label}
               </text>

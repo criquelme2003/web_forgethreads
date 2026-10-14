@@ -2,10 +2,12 @@ import { useMemo, useRef, useState } from 'react';
 import { fmtValue, orderColor, orderLabels, pathLabel, useWidth } from './pathsModel.js';
 
 /**
- * Chord diagram de efectos olvidados: causas (origen) y efectos (destino) en un círculo, una
- * cinta por (origen, destino, orden) coloreada por orden y con ancho proporcional a la suma de
- * la métrica de sus caminos. Los intermedios se ven en el tooltip.
- * Clic en una causa: filtra por ese origen (otro clic lo quita).
+ * Chord diagram dirigido de efectos olvidados. Cada etiqueta aparece una vez en el círculo
+ * (primero las causas, luego los efectos): un camino puede empezar o terminar en cualquier
+ * nodo del grafo, así que un mismo nodo puede ser origen de unos caminos y destino de otros.
+ * Una cinta por (origen, destino, orden), coloreada por orden, con ancho proporcional a la suma
+ * de la métrica de sus caminos y punta de flecha en el destino. Los intermedios van en el tooltip.
+ * Clic en un nodo que sea origen de algún camino: filtra por ese origen (otro clic lo quita).
  */
 
 const ARC_WIDTH = 10;
@@ -25,9 +27,12 @@ function arcPath(a0, a1, r0, r1) {
   return `M${x0},${y0}A${r1},${r1} 0 ${large} 1 ${x1},${y1}L${x2},${y2}A${r0},${r0} 0 ${large} 0 ${x3},${y3}Z`;
 }
 
+/** Cinta del arco de origen [s0,s1] al de destino [t0,t1], que termina en punta de flecha. */
 function ribbonPath(s0, s1, t0, t1, r) {
-  const p = (a) => polar(a, r).join(',');
-  return `M${p(s0)}A${r},${r} 0 0 1 ${p(s1)}Q0,0 ${p(t0)}A${r},${r} 0 0 1 ${p(t1)}Q0,0 ${p(s0)}Z`;
+  const p = (a, rr = r) => polar(a, rr).join(',');
+  const head = Math.min(10, r * 0.08);
+  const tm = (t0 + t1) / 2;
+  return `M${p(s0)}A${r},${r} 0 0 1 ${p(s1)}Q0,0 ${p(t0, r - head)}L${p(tm)}L${p(t1, r - head)}Q0,0 ${p(s0)}Z`;
 }
 
 function buildLayout(paths, causes, effects) {
@@ -40,26 +45,34 @@ function buildLayout(paths, causes, effects) {
     ribbons.set(key, rb);
   }
   const list = [...ribbons.values()];
+  if (!list.length) return null;
+
+  // Un nodo por etiqueta; cada cinta suma su valor en el nodo de origen y en el de destino.
   const weight = new Map();
+  const origins = new Set();
   for (const rb of list) {
-    weight.set(`c:${rb.from}`, (weight.get(`c:${rb.from}`) || 0) + rb.value);
-    weight.set(`e:${rb.to}`, (weight.get(`e:${rb.to}`) || 0) + rb.value);
+    weight.set(rb.from, (weight.get(rb.from) || 0) + rb.value);
+    weight.set(rb.to, (weight.get(rb.to) || 0) + rb.value);
+    origins.add(rb.from);
   }
-  // Nodos por rol (origen / destino) a partir de los caminos; las listas del proyecto solo ordenan.
-  const causeNodes = orderLabels(new Set(list.map((rb) => rb.from)), causes)
-    .map((label) => ({ id: `c:${label}`, label, kind: 'cause' }));
-  const effectNodes = orderLabels(new Set(list.map((rb) => rb.to)), effects)
-    .map((label) => ({ id: `e:${label}`, label, kind: 'effect' }));
-  const nodes = [...causeNodes, ...effectNodes];
-  if (!nodes.length) return null;
+  const causeSet = new Set(causes);
+  const effectSet = new Set(effects);
+  const nodes = orderLabels(new Set(weight.keys()), [...causes, ...effects]).map((label) => ({
+    id: label,
+    label,
+    kind: causeSet.has(label) ? 'cause' : effectSet.has(label) ? 'effect' : 'other',
+    isOrigin: origins.has(label),
+  }));
+  const causeCount = nodes.filter((n) => n.kind === 'cause').length;
+  const gaps = causeCount > 0 && causeCount < nodes.length ? 2 : 1; // hueco entre grupos (si hay dos)
 
   const total = [...weight.values()].reduce((s, v) => s + v, 0);
   const pad = Math.min(0.02, 0.6 / nodes.length);
-  const available = 2 * Math.PI - 2 * GROUP_GAP - pad * Math.max(0, nodes.length - 2);
+  const available = 2 * Math.PI - gaps * GROUP_GAP - pad * Math.max(0, nodes.length - gaps);
   const byId = new Map();
   let angle = GROUP_GAP / 2;
   nodes.forEach((n, i) => {
-    if (i === causeNodes.length) angle += GROUP_GAP - pad; // salto entre causas y efectos
+    if (gaps === 2 && i === causeCount) angle += GROUP_GAP - pad; // salto entre causas y efectos
     n.start = angle;
     n.end = angle + (weight.get(n.id) / total) * available;
     n.cursor = n.start;
@@ -67,27 +80,26 @@ function buildLayout(paths, causes, effects) {
     byId.set(n.id, n);
   });
 
-  // Dentro de cada nodo, las cintas van por orden y luego por la posición del otro extremo.
+  // En cada nodo van primero las cintas que salen y luego las que llegan, por orden y por la
+  // posición del otro extremo, para que se crucen menos.
   const index = new Map(nodes.map((n, i) => [n.id, i]));
   const sorted = [...list].sort((a, b) => a.order - b.order
-    || index.get(`e:${a.to}`) - index.get(`e:${b.to}`)
-    || index.get(`c:${a.from}`) - index.get(`c:${b.from}`));
+    || index.get(a.to) - index.get(b.to) || index.get(a.from) - index.get(b.from));
   for (const rb of sorted) {
-    const src = byId.get(`c:${rb.from}`);
+    const src = byId.get(rb.from);
     const span = (rb.value / total) * available;
     rb.s0 = src.cursor;
     rb.s1 = src.cursor + span;
     src.cursor += span;
   }
-  // En los efectos, en orden inverso de origen para que las cintas se crucen menos.
-  for (const rb of [...sorted].sort((a, b) => a.order - b.order || index.get(`c:${b.from}`) - index.get(`c:${a.from}`))) {
-    const dst = byId.get(`e:${rb.to}`);
+  for (const rb of [...sorted].sort((a, b) => a.order - b.order || index.get(b.from) - index.get(a.from))) {
+    const dst = byId.get(rb.to);
     const span = (rb.value / total) * available;
     rb.t0 = dst.cursor;
     rb.t1 = dst.cursor + span;
     dst.cursor += span;
   }
-  return { nodes, ribbons: sorted, causeCount: causeNodes.length };
+  return { nodes, ribbons: sorted, causeCount };
 }
 
 export default function PathsChord({ paths, orders, causes, effects, metric, origin, onOriginChange }) {
@@ -102,7 +114,7 @@ export default function PathsChord({ paths, orders, causes, effects, metric, ori
   const lit = (rb) => {
     if (!hover) return true;
     if (hover.kind === 'ribbon') return hover.id === rb.key;
-    return hover.id === `c:${rb.from}` || hover.id === `e:${rb.to}`;
+    return hover.id === rb.from || hover.id === rb.to;
   };
 
   function show(evt, kind, id, tip) {
@@ -124,18 +136,21 @@ export default function PathsChord({ paths, orders, causes, effects, metric, ori
   }
 
   function nodeTip(n) {
-    const own = layout.ribbons.filter((rb) => (n.kind === 'cause' ? rb.from === n.label : rb.to === n.label));
-    const value = own.reduce((s, rb) => s + rb.value, 0);
+    const out = layout.ribbons.filter((rb) => rb.from === n.label);
+    const inc = layout.ribbons.filter((rb) => rb.to === n.label);
+    const count = (list) => list.reduce((s, rb) => s + rb.paths.length, 0);
+    const sum = (list) => list.reduce((s, rb) => s + rb.value, 0);
+    const kind = { cause: 'causa', effect: 'efecto', other: 'nodo' }[n.kind];
     return {
-      value: fmtValue(value),
+      value: fmtValue(sum(out) + sum(inc)),
       title: n.label,
-      detail: `${n.kind === 'cause' ? 'causa (origen)' : 'efecto (destino)'} · ${own.reduce((s, rb) => s + rb.paths.length, 0)} caminos`,
-      lines: n.kind === 'cause' ? [origin === n.label ? 'Clic para quitar el filtro' : 'Clic para filtrar por este origen'] : [],
+      detail: `${kind} · sale en ${count(out)} camino${count(out) === 1 ? '' : 's'} · llega en ${count(inc)}`,
+      lines: n.isOrigin ? [origin === n.label ? 'Clic para quitar el filtro' : 'Clic para filtrar por este origen'] : [],
     };
   }
 
   function toggleOrigin(n) {
-    if (n.kind === 'cause') onOriginChange(origin === n.label ? '' : n.label);
+    if (n.isOrigin || origin === n.label) onOriginChange(origin === n.label ? '' : n.label);
   }
 
   if (!layout) return <div className="empty" ref={wrapRef}>Sin caminos para dibujar</div>;
@@ -147,7 +162,7 @@ export default function PathsChord({ paths, orders, causes, effects, metric, ori
         height={size}
         viewBox={`${-size / 2} ${-size / 2} ${size} ${size}`}
         role="img"
-        aria-label={`Chord diagram de ${paths.length} caminos entre ${layout.causeCount} causas y ${layout.nodes.length - layout.causeCount} efectos`}
+        aria-label={`Chord diagram dirigido de ${paths.length} caminos entre ${layout.nodes.length} nodos`}
         onPointerLeave={() => setHover(null)}
         style={{ display: 'block', margin: '0 auto' }}
       >
@@ -170,15 +185,15 @@ export default function PathsChord({ paths, orders, causes, effects, metric, ori
           const mid = (n.start + n.end) / 2;
           const deg = (mid * 180) / Math.PI;
           const left = mid > Math.PI;
-          const active = n.kind === 'cause' && origin === n.label;
+          const active = origin === n.label;
           const dim = hover && hover.kind === 'node' && hover.id !== n.id;
           return (
             <g
               key={n.id}
-              className={`pv-node${n.kind === 'cause' ? ' is-clickable' : ''}`}
+              className={`pv-node${n.isOrigin ? ' is-clickable' : ''}`}
               tabIndex={0}
-              role={n.kind === 'cause' ? 'button' : undefined}
-              aria-label={`${n.label}${n.kind === 'cause' ? ', filtrar por este origen' : ''}`}
+              role={n.isOrigin ? 'button' : undefined}
+              aria-label={`${n.label}${n.isOrigin ? ', filtrar por este origen' : ''}`}
               opacity={dim ? 0.45 : 1}
               onPointerMove={(e) => show(e, 'node', n.id, nodeTip(n))}
               onFocus={(e) => show(e, 'node', n.id, nodeTip(n))}

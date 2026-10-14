@@ -161,7 +161,7 @@ details.card>summary{cursor:pointer;list-style:revert}
 /* chord y hive plot de caminos: nodos neutros, cintas/caminos por orden (rampa ordinal azul validada) */
 .paths-viz{position:relative;width:100%;margin-top:4px}
 .pv-ribbon{transition:fill-opacity .12s}
-.pv-arc{fill:#6b7280}
+.pv-arc{fill:#4b5563}
 .pv-arc.effect{fill:#9ca3af}
 .pv-arc.is-active{fill:var(--text)}
 .pv-axis{stroke:#d1d5db;stroke-width:1}
@@ -179,3 +179,7 @@ details.card>summary{cursor:pointer;list-style:revert}
 .legend-chip.is-off{opacity:.45;text-decoration:line-through}
 /* En los nodos que filtran por origen, la etiqueta también recibe el clic (queda sobre los enlaces). */
 .sankey-node.is-clickable .sankey-label,.pv-node.is-clickable .pv-label{pointer-events:auto;cursor:pointer}
+.pv-dot.effect{fill:#9ca3af}
+.pv-arc.other,.pv-dot.other{fill:#d1d5db}
+.pv-kind-legend{display:inline-flex;gap:12px;align-items:center}
+.pv-kind-legend span{display:inline-flex;gap:5px;align-items:center}

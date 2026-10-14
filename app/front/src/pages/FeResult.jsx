@@ -165,9 +165,13 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
             </button>
           );
         })}
+        <span className="pv-kind-legend small muted">
+          <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#4b5563" /></svg>Causa</span>
+          <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#9ca3af" /></svg>Efecto</span>
+        </span>
         <span className="small muted">
           {view === 'chord'
-            ? `más oscuro = más indirecto · ancho = suma de ${metric} · clic en una causa para filtrar`
+            ? `más oscuro = más indirecto · ancho = suma de ${metric} · la flecha apunta al destino · clic en un nodo para filtrar por ese origen`
             : `más oscuro = más indirecto · grosor = ${metric} · clic en un origen para filtrar`}
         </span>
       </div>
