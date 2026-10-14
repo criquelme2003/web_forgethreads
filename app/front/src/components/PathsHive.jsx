@@ -6,8 +6,8 @@ import { fmtValue, maxValue, orderLabels, pathLabel, useWidth } from './pathsMod
  * Intermedio 1..k (Through_1..k) y Destino (To), con k = orden máximo − 1. Separar los
  * intermedios por posición evita que un solo eje central concentre todos los nodos.
  *
- * Estilo de "esfera": panel oscuro, tramos finos en blanco translúcido que se curvan por fuera
- * de los ejes (los caminos frecuentes se ven más brillantes al superponerse) y nodos coloreados
+ * Estilo de "esfera": panel oscuro, tramos finos en blanco translúcido dibujados como arcos de
+ * circunferencia entre ejes (los caminos frecuentes se ven más brillantes al superponerse) y nodos coloreados
  * por eje con la paleta categórica validada para fondo oscuro (causa = punto relleno,
  * efecto = anillo). Al pasar el cursor, el camino completo se ilumina.
  * Clic en un nodo del eje Origen: filtra por ese origen (otro clic lo quita).
@@ -17,7 +17,6 @@ const INNER = 26;
 // Paleta categórica del modo oscuro (validada, parejas contiguas). Más de 8 ejes: gris.
 const AXIS_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
 const AXIS_OVERFLOW = '#8a8a85';
-const BULGE = 1.18; // los tramos se curvan hasta ~18% más allá del radio de los ejes
 const SIDE_BEND = 0.38; // rad: desvío si un tramo uniera dos nodos del mismo eje (no debería pasar)
 
 /**
@@ -47,11 +46,14 @@ function polar(angle, r) {
 }
 
 /**
- * Tramo entre dos puntos (eje, radio): curva cúbica que sale hacia afuera, tanto más cuanto
- * más separados están los ejes (los que saltan ejes rodean el círculo por fuera, sin cruzar
- * el centro). La curva queda dentro de BULGE·R porque no supera a sus puntos de control.
+ * Tramo entre dos puntos (eje, radio) como arco de circunferencia: recorre el ángulo entre los
+ * dos ejes (por el lado más corto) pasando suavemente del radio de un nodo al del otro. Todos
+ * los tramos entre un mismo par de ejes son arcos paralelos, sin lazos ni cruces por el centro.
+ *
+ * Cúbica con los puntos de control a 1/3 y 2/3 del ángulo, escalados por k para que el punto
+ * medio de la curva quede sobre el arco: k = (8 − 2·cos(θ/2)) / (6·cos(θ/6)).
  */
-function segment(a, b, R) {
+function segment(a, b) {
   const [x2, y2] = polar(b.angle, b.r);
   let d = b.angle - a.angle;
   if (d > Math.PI) d -= 2 * Math.PI;
@@ -61,13 +63,10 @@ function segment(a, b, R) {
     const [c2x, c2y] = polar(b.angle + SIDE_BEND, b.r + 6);
     return `C${c1x},${c1y} ${c2x},${c2y} ${x2},${y2}`;
   }
-  // Más curvatura cuanto más separados los ejes y más lejos del centro los nodos: los tramos
-  // cercanos al centro hacen arcos suaves y los exteriores rodean el círculo.
-  const rMax = Math.max(a.r, b.r);
-  const f = Math.min(1, Math.abs(d) / Math.PI) * (0.35 + 0.65 * (rMax / R));
-  const rc = rMax + (BULGE * R - rMax) * f;
-  const [c1x, c1y] = polar(a.angle + d / 3, (rc + a.r) / 2 + (rc - a.r) * 0.25);
-  const [c2x, c2y] = polar(a.angle + (2 * d) / 3, (rc + b.r) / 2 + (rc - b.r) * 0.25);
+  const t = Math.abs(d);
+  const k = (8 - 2 * Math.cos(t / 2)) / (6 * Math.cos(t / 6));
+  const [c1x, c1y] = polar(a.angle + d / 3, a.r * k);
+  const [c2x, c2y] = polar(a.angle + (2 * d) / 3, b.r * k);
   return `C${c1x},${c1y} ${c2x},${c2y} ${x2},${y2}`;
 }
 
@@ -103,7 +102,7 @@ function buildLayout(paths, orders, causes, effects, R) {
     const points = [pos.origin.get(p.from), ...p.through.map((t, i) => pos[`t${i + 1}`].get(t)), pos.dest.get(p.to)];
     const [x0, y0] = polar(points[0].angle, points[0].r);
     let d = `M${x0},${y0}`;
-    for (let i = 1; i < points.length; i += 1) d += segment(points[i - 1], points[i], R);
+    for (let i = 1; i < points.length; i += 1) d += segment(points[i - 1], points[i]);
     return { ...p, d, nodeIds: new Set(points.map((n) => n.id)), width: max ? 0.6 + (p.value / max) * 2 : 1 };
   });
   // Los más intensos al final, para que queden encima.
@@ -117,8 +116,8 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
   const [hover, setHover] = useState(null); // { kind: 'line'|'node', id, tip }
 
   const size = Math.max(320, Math.min(width || 760, 760));
-  // Los tramos llegan hasta BULGE·R; se deja aire para los títulos de los ejes.
-  const R = (size / 2 - 64) / BULGE;
+  // Los arcos no pasan del radio de su nodo más externo; se deja aire para los títulos.
+  const R = size / 2 - 110;
   const layout = useMemo(
     () => (paths.length ? buildLayout(paths, orders, causes, effects, R) : null),
     [paths, orders, causes, effects, R],
