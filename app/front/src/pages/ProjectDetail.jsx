@@ -5,7 +5,8 @@ import { errorText } from '../components/MatricesInput.jsx';
 import MaxMinForm from '../components/MaxMinForm.jsx';
 import { ExpertFields, expertPayload, fmtDate, TIPO_LABELS } from './Projects.jsx';
 
-const POLL_MS = 5000;
+const POLL_MS = 5000; // con cálculos en curso
+const IDLE_POLL_MS = 15000; // proyecto abierto sin cálculos en curso: esperando inputs nuevos
 
 const TRANSITION_LABELS = {
   abierto: { borrador: 'Abrir a expertos', cerrado: 'Reabrir proyecto' },
@@ -113,7 +114,7 @@ function LinkBox({ invitation, onClose }) {
   );
 }
 
-function Invitations({ project, onChanged }) {
+function Invitations({ project, onChanged, refreshKey }) {
   const [items, setItems] = useState(null);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
@@ -128,7 +129,7 @@ function Invitations({ project, onChanged }) {
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   async function invite(e) {
     e.preventDefault();
@@ -295,7 +296,7 @@ function ComputeForm({ project, selected, names, onDone }) {
   );
 }
 
-function Inputs({ project, onChanged }) {
+function Inputs({ project, onChanged, onNewInputs }) {
   const [items, setItems] = useState(null);
   const [selected, setSelected] = useState(null); // Set de ids; null = aún sin cargar
   const [msg, setMsg] = useState('');
@@ -320,18 +321,46 @@ function Inputs({ project, onChanged }) {
   useEffect(() => {
     let timer;
     let cancelled = false;
-    async function poll() {
-      const data = await load();
-      if (cancelled) return;
-      // Sigue consultando mientras haya cálculos en curso.
-      if ((data || []).some((i) => i.calculos.some((c) => c.status === 'pending'))) timer = setTimeout(poll, POLL_MS);
+    let lastCount = null;
+    let lastPending = false;
+    let inFlight = false;
+
+    function schedule() {
+      // Con cálculos en curso, cada 5 s. Abierto sin cálculos, cada 15 s (pueden llegar inputs).
+      // Cerrado y sin cálculos en curso no puede cambiar nada: se deja de consultar.
+      const delay = lastPending ? POLL_MS : project.estado === 'abierto' ? IDLE_POLL_MS : null;
+      if (delay) timer = setTimeout(poll, delay);
     }
+
+    async function poll() {
+      // Con la pestaña oculta no se consulta; se retoma al volver (ver onVisible).
+      if (document.hidden || inFlight) return;
+      inFlight = true;
+      const data = await load().finally(() => { inFlight = false; });
+      if (cancelled) return;
+      if (data) {
+        if (lastCount !== null && data.length > lastCount) onNewInputs?.();
+        lastCount = data.length;
+        lastPending = data.some((i) => i.calculos.some((c) => c.status === 'pending'));
+      }
+      schedule();
+    }
+
+    function onVisible() {
+      if (document.hidden || cancelled) return;
+      clearTimeout(timer);
+      poll();
+    }
+
     poll();
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [load, pollKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, pollKey, project.estado]);
 
   async function toggleExcluded(item) {
     const { ok, data } = await send(`/app/projects/${project.id}/inputs/${item.id}`, 'PATCH', { excluido: !item.excluido })
@@ -473,6 +502,7 @@ export default function ProjectDetail() {
   const [editing, setEditing] = useState(false);
   const [msg, setMsg] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [inputsKey, setInputsKey] = useState(0); // sube al llegar inputs nuevos: recarga invitaciones
 
   const load = useCallback(async () => {
     const { ok, data } = await send(`/app/projects/${projectId}`, 'GET').catch(() => ({ ok: false, data: {} }));
@@ -554,8 +584,14 @@ export default function ProjectDetail() {
         )}
       </div>
 
-      {expert && <Invitations project={project} onChanged={load} />}
-      {expert && <Inputs project={project} onChanged={load} />}
+      {expert && <Invitations project={project} onChanged={load} refreshKey={inputsKey} />}
+      {expert && (
+        <Inputs
+          project={project}
+          onChanged={load}
+          onNewInputs={() => { setInputsKey((k) => k + 1); load(); }}
+        />
+      )}
 
       {!expert && (
         <div className="card">
