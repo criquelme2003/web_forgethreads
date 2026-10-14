@@ -5,7 +5,9 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.repositories.slurm import SlurmRepository
+from app.services.demo_seed import seed_demo
 from app.services.node_selector import NodeSelector
+from app.services.project_store import project_store
 from app.ssh.connection import clear_singletons, get_pool_from_settings, set_singletons
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,12 @@ async def global_lifespan(app: FastAPI):
         print("No SSH nodes configured (revisa .env CUDA*_IP)")
         logger.warning("No SSH nodes configured")
     
+    if settings.seed_demo_data:
+        try:
+            await seed_demo(project_store, owner=settings.auth_username)
+        except Exception as e:  # noqa: BLE001  (los datos de muestra nunca impiden arrancar)
+            logger.warning("No se pudieron crear los datos de muestra: %s", e)
+
     yield
 
     print("Closing SSH pool")

@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Espera tras el sbatch antes de revisar con squeue que el job no quedó bloqueado en el nodo
     # (ReqNodeNotAvail, etc.); si quedó bloqueado se cancela y se prueba el siguiente nodo (RF-46).
     submit_check_delay_s: float = 2.0
+    # Crea al iniciar los proyectos de muestra que falten (ver app/services/demo_seed.py)
+    seed_demo_data: bool = False
     # Jobs notifier
     callback_base_url: str | None = None  # ej http://host:8000, si None se deduce de request.host
 

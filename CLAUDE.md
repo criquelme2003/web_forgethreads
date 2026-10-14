@@ -47,6 +47,7 @@ uv run uvicorn app.main:app --reload            # servidor local
 - `/app/invite/{token}` es público (sin sesión): info, validación contra las etiquetas del proyecto y envío. El envío consume el token en la misma transacción que guarda el input (matrices normalizadas en `expert_inputs`); no lanza nada en el cluster.
 - `POST /app/projects/{id}/compute` (`thr`, `maxorder`, `nodo?`, `input_ids?`; por defecto los no excluidos) lanza un `fe_job.sh` por input. Los errores de lanzamiento se devuelven por input; reintentar es volver a lanzar.
 - Al abrir la base, los jobs MaxMin sin proyecto se mueven a un proyecto de simulación «MaxMin (jobs anteriores)».
+- Datos de muestra (`app/services/demo_seed.py`): «Demo · Expertos» (abierto, con un input de `docs/ejemplos_fe`) y «Demo · Simulación» (vacío). Se crean si faltan con `SEED_DEMO_DATA=true` al iniciar o con `uv run python -m app.services.demo_seed`.
 
 El contrato con el cluster está en el README de [scripts_wf](https://github.com/criquelme2003/scripts_wf).
 
