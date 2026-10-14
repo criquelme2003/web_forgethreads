@@ -13,43 +13,15 @@ import { useEffect, useState } from 'react';
 export const ORDER_RAMP = ['#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281'];
 export const FIRST_ORDER = 2;
 
-/**
- * Paso de la rampa para el elemento `i` de `count` (0-based). Con hasta 5 elementos se reparten a
- * lo largo de toda la rampa (más separación); con más, desde el quinto comparten el más oscuro.
- */
-export function rampColor(i, count) {
-  const n = ORDER_RAMP.length;
-  if (count <= 1) return ORDER_RAMP[2];
-  if (count <= n) return ORDER_RAMP[Math.round((i * (n - 1)) / (count - 1))];
-  return ORDER_RAMP[Math.max(0, Math.min(i, n - 1))];
-}
-
 /** `orders`: todos los órdenes del job, para repartir los pasos de la rampa. */
 export function orderColor(order, orders) {
-  if (orders && orders.length <= ORDER_RAMP.length) {
+  const n = ORDER_RAMP.length;
+  if (orders && orders.length <= n) {
     const sorted = [...orders].sort((a, b) => a - b);
     const i = sorted.indexOf(order);
-    if (i >= 0) return rampColor(i, sorted.length);
+    if (i >= 0) return ORDER_RAMP[sorted.length === 1 ? 2 : Math.round((i * (n - 1)) / (sorted.length - 1))];
   }
-  return ORDER_RAMP[Math.max(0, Math.min(order - FIRST_ORDER, ORDER_RAMP.length - 1))];
-}
-
-/** Cantidad de tramos de un camino (= su orden): origen → intermedios → destino. */
-export function hopCount(p) {
-  return p.through.length + 1;
-}
-
-export function maxHops(paths) {
-  return paths.reduce((m, p) => Math.max(m, hopCount(p)), 0);
-}
-
-/**
- * Color del tramo `hop` (0 = el que sale del origen) de un camino de `hops` tramos: el primero
- * es siempre el más claro y el último el más oscuro, sea cual sea el largo del camino.
- */
-export function hopColor(hop, hops) {
-  if (hops <= 1) return ORDER_RAMP[ORDER_RAMP.length - 1];
-  return ORDER_RAMP[Math.round((hop * (ORDER_RAMP.length - 1)) / (hops - 1))];
+  return ORDER_RAMP[Math.max(0, Math.min(order - FIRST_ORDER, n - 1))];
 }
 
 /** Clave de leyenda: con más de 5 órdenes, desde el 6 comparten color y se agrupan en "6+". */

@@ -37,7 +37,7 @@ uv run uvicorn app.main:app --reload            # servidor local
 2. `POST /app/fe/execute` sube `CC.npy`, `CE.npy`, `EE.npy` y `meta.json` por SFTP a `<scripts_wf>/jobs_inputs/<request_id>/` (`app/services/fe_remote.py`) y lanza `sbatch fe_job.sh --input-dir ...` + notifier (`app/api/launch.py`).
 3. El callback guarda el resumen (`orders`, `rows_per_order`, `k`) en `jobs.result`.
 4. `GET /app/fe/jobs/{id}/paths` descarga por SFTP `jobs_results/<id>/paths_order_<o>.csv` la primera vez y los cachea en `fe_results_dir`.
-5. El SPA (`/front/fe/jobs/<id>`) los muestra como Sankey por orden, chord (cada camino tramo a tramo, de claro a oscuro) o hive plot (un eje por posición: Origen, Intermedio 1..k, Destino) (`components/Paths*.jsx`, modelo común en `pathsModel.js`); el filtro de origen es compartido y se cambia con un clic en un nodo de origen.
+5. El SPA (`/front/fe/jobs/<id>`) los muestra como Sankey por orden, chord (dirigido, origen → destino sin intermedios, color por orden) o hive plot (ejes Origen, Intermedios y Destino, color por orden) (`components/Paths*.jsx`, modelo común en `pathsModel.js`); el filtro de origen es compartido y se cambia con un clic en un nodo de origen.
 
 ### Proyectos
 

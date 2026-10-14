@@ -183,12 +183,3 @@ details.card>summary{cursor:pointer;list-style:revert}
 .pv-arc.other,.pv-dot.other{fill:#d1d5db}
 .pv-kind-legend{display:inline-flex;gap:12px;align-items:center}
 .pv-kind-legend span{display:inline-flex;gap:5px;align-items:center}
-
-/* hive plot estilo "esfera": panel oscuro (superficie y textos del modo oscuro de la paleta) */
-.hive-panel{background:#1a1a19;border-radius:var(--radius);padding:8px 0}
-.hv-axis{stroke:#383835;stroke-width:1}
-.hv-axis-title{font-size:11px;letter-spacing:.05em;text-transform:uppercase;fill:#c3c2b7}
-.hv-label{font-size:11px;fill:#c3c2b7;paint-order:stroke;stroke:#1a1a19;stroke-width:3px;stroke-linejoin:round;pointer-events:none}
-.hv-label.is-active{fill:#f0efec;font-weight:700}
-.pv-node.is-clickable .hv-label{pointer-events:auto;cursor:pointer}
-.pv-node:focus-visible circle:last-of-type{stroke:#f0efec;stroke-width:2px}
