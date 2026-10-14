@@ -61,7 +61,11 @@ function useWidth(ref) {
   return width;
 }
 
-export default function PathsSankey({ columns, rows, metric, causes }) {
+/**
+ * `origin` / `onOriginChange`: un clic en un nodo de la columna From filtra por ese origen
+ * (otro clic sobre el origen activo quita el filtro).
+ */
+export default function PathsSankey({ columns, rows, metric, causes, origin, onOriginChange }) {
   const wrapRef = useRef(null);
   const width = useWidth(wrapRef);
   const [hover, setHover] = useState(null); // { paths:Set, tip:{x,y,title,value,detail} }
@@ -107,11 +111,19 @@ export default function PathsSankey({ columns, rows, metric, causes }) {
   }
 
   function nodeTip(n) {
+    const clickable = n.layer === 0 && onOriginChange;
     return {
       title: n.label,
       value: `${fmt(n.value)}`,
       detail: `${graph.layers[n.layer]} · ${n.paths.size} camino${n.paths.size === 1 ? '' : 's'}`,
+      hint: clickable ? (origin === n.label ? 'Clic para quitar el filtro' : 'Clic para filtrar por este origen') : null,
     };
+  }
+
+  function toggleOrigin(n) {
+    if (n.layer !== 0 || !onOriginChange) return;
+    setHover(null);
+    onOriginChange(origin === n.label ? '' : n.label);
   }
 
   return (
@@ -172,11 +184,16 @@ export default function PathsSankey({ columns, rows, metric, causes }) {
           {layout.nodes.map((n) => {
             const lit = isLit(n.paths);
             const right = n.layer === lastLayer;
+            const clickable = n.layer === 0 && Boolean(onOriginChange);
             return (
               <g
                 key={n.id}
                 tabIndex={0}
-                className="sankey-node"
+                className={`sankey-node${clickable ? ' is-clickable' : ''}`}
+                role={clickable ? 'button' : undefined}
+                aria-label={clickable ? `${n.label}, filtrar por este origen` : undefined}
+                onClick={() => toggleOrigin(n)}
+                onKeyDown={(e) => { if (clickable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleOrigin(n); } }}
                 opacity={lit ? 1 : 0.35}
                 onPointerMove={(e) => show(e, n.paths, nodeTip(n))}
                 onFocus={(e) => show(e, n.paths, nodeTip(n))}
@@ -223,6 +240,7 @@ export default function PathsSankey({ columns, rows, metric, causes }) {
           <strong>{hover.tip.value}</strong> <span className="muted">{metric}</span>
           <div>{hover.tip.title}</div>
           <div className="muted">{hover.tip.detail}</div>
+          {hover.tip.hint && <div className="small">{hover.tip.hint}</div>}
         </div>
       )}
     </div>
