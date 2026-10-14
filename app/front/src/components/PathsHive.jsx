@@ -2,20 +2,36 @@ import { useMemo, useRef, useState } from 'react';
 import { fmtValue, maxValue, orderColor, orderLabels, pathLabel, useWidth } from './pathsModel.js';
 
 /**
- * Hive plot de efectos olvidados con tres ejes según el rol en el camino: Origen (From),
- * Intermedios (Through_*) y Destino (To). Cada camino se dibuja completo, coloreado por orden;
- * los tramos entre intermedios consecutivos van sobre el mismo eje como un arco lateral.
+ * Hive plot de efectos olvidados con un eje por posición en el camino: Origen (From),
+ * Intermedio 1, Intermedio 2, … (Through_1, Through_2, …) y Destino (To). Separar los
+ * intermedios por posición evita que un solo eje central concentre todos los nodos, y un camino
+ * nunca vuelve a un eje: avanza en sentido horario de Origen a Destino. Coloreado por orden.
  * Clic en un nodo del eje Origen: filtra por ese origen (otro clic lo quita).
  */
 
 const INNER = 34;
-const AXES = [
-  { key: 'origin', title: 'Origen', angle: (240 * Math.PI) / 180 },
-  { key: 'through', title: 'Intermedios', angle: 0 },
-  { key: 'dest', title: 'Destino', angle: (120 * Math.PI) / 180 },
-];
-const AXIS = Object.fromEntries(AXES.map((a) => [a.key, a]));
-const SIDE_BEND = 0.38; // rad: desvío de los tramos sobre el mismo eje
+const SIDE_BEND = 0.38; // rad: desvío si un tramo uniera dos nodos del mismo eje (no debería pasar)
+
+/**
+ * Ejes Origen, Intermedio 1..k y Destino repartidos en todo el círculo, en sentido horario y
+ * simétricos respecto de la vertical: Origen abajo a la izquierda, Destino abajo a la derecha
+ * (con 3 ejes: 240°, 0° y 120°; con 5: cada 72°).
+ */
+function buildAxes(throughCount) {
+  const keys = [
+    { key: 'origin', title: 'Origen' },
+    ...Array.from({ length: throughCount }, (_, i) => ({
+      key: `t${i + 1}`,
+      title: throughCount === 1 ? 'Intermedio' : `Intermedio ${i + 1}`,
+    })),
+    { key: 'dest', title: 'Destino' },
+  ];
+  const step = 360 / keys.length;
+  return keys.map((a, i) => ({
+    ...a,
+    angle: (((180 + step / 2 + i * step) % 360) * Math.PI) / 180,
+  }));
+}
 
 function polar(angle, r) {
   return [r * Math.sin(angle), -r * Math.cos(angle)];
@@ -43,23 +59,20 @@ function segment(a, b) {
 }
 
 function buildLayout(paths, causes, effects, R) {
-  const used = { origin: new Set(), through: new Set(), dest: new Set() };
+  const throughCount = paths.reduce((m, p) => Math.max(m, p.through.length), 0);
+  const axes = buildAxes(throughCount);
+  const used = Object.fromEntries(axes.map((a) => [a.key, new Set()]));
   for (const p of paths) {
     used.origin.add(p.from);
-    p.through.forEach((t) => used.through.add(t));
+    p.through.forEach((t, i) => used[`t${i + 1}`].add(t));
     used.dest.add(p.to);
   }
-  const ordered = {
-    // Un camino puede empezar o terminar en cualquier nodo: los tres ejes usan el mismo orden
-    // (causas y luego efectos del proyecto).
-    origin: orderLabels(used.origin, [...causes, ...effects]),
-    through: orderLabels(used.through, [...causes, ...effects]),
-    dest: orderLabels(used.dest, [...causes, ...effects]),
-  };
   const nodes = [];
   const pos = {};
-  for (const axis of AXES) {
-    const labels = ordered[axis.key];
+  for (const axis of axes) {
+    // Un camino puede pasar por cualquier nodo: todos los ejes usan el mismo orden de etiquetas
+    // (causas y luego efectos del proyecto).
+    const labels = orderLabels(used[axis.key], [...causes, ...effects]);
     pos[axis.key] = new Map();
     labels.forEach((label, i) => {
       const r = INNER + ((i + 0.5) / labels.length) * (R - INNER);
@@ -71,7 +84,7 @@ function buildLayout(paths, causes, effects, R) {
   }
   const max = maxValue(paths);
   const lines = paths.map((p) => {
-    const points = [pos.origin.get(p.from), ...p.through.map((t) => pos.through.get(t)), pos.dest.get(p.to)];
+    const points = [pos.origin.get(p.from), ...p.through.map((t, i) => pos[`t${i + 1}`].get(t)), pos.dest.get(p.to)];
     const [x0, y0] = polar(points[0].angle, points[0].r);
     let d = `M${x0},${y0}`;
     for (let i = 1; i < points.length; i += 1) d += segment(points[i - 1], points[i]);
@@ -79,7 +92,7 @@ function buildLayout(paths, causes, effects, R) {
   });
   // Los más intensos al final, para que queden encima.
   lines.sort((a, b) => a.value - b.value);
-  return { nodes, lines };
+  return { nodes, lines, axes, axisByKey: Object.fromEntries(axes.map((a) => [a.key, a])) };
 }
 
 export default function PathsHive({ paths, orders, causes, effects, metric, origin, onOriginChange }) {
@@ -89,10 +102,11 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
 
   const size = Math.max(320, Math.min(width || 760, 760));
   const R = size / 2 - 90;
-  // Los ejes Origen y Destino apuntan hacia abajo a 60° de la horizontal: solo bajan R·cos(60°).
-  const top = -R - 44;
-  const height = R + 44 + R * 0.5 + 40;
   const layout = useMemo(() => (paths.length ? buildLayout(paths, causes, effects, R) : null), [paths, causes, effects, R]);
+  // Alto según hasta dónde suben y bajan los ejes (con 3 ejes, los de abajo solo bajan R/2).
+  const ys = layout ? layout.axes.map((a) => -Math.cos(a.angle) * R) : [-R, R];
+  const top = Math.min(...ys) - 44;
+  const height = Math.max(...ys) + 44 - top;
 
   const lit = (line) => !hover || (hover.kind === 'line' ? hover.id === line.id : line.nodeIds.has(hover.id));
 
@@ -115,7 +129,7 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
     return {
       value: `${own.length} camino${own.length === 1 ? '' : 's'}`,
       title: n.label,
-      detail: AXIS[n.axis].title,
+      detail: layout.axisByKey[n.axis].title,
       lines: n.axis === 'origin' ? [origin === n.label ? 'Clic para quitar el filtro' : 'Clic para filtrar por este origen'] : [],
     };
   }
@@ -133,11 +147,11 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
         height={height}
         viewBox={`${-size / 2} ${top} ${size} ${height}`}
         role="img"
-        aria-label={`Hive plot de ${paths.length} caminos: ejes Origen, Intermedios y Destino`}
+        aria-label={`Hive plot de ${paths.length} caminos: ejes ${layout.axes.map((a) => a.title).join(', ')}`}
         onPointerLeave={() => setHover(null)}
         style={{ display: 'block', margin: '0 auto' }}
       >
-        {AXES.map((a) => {
+        {layout.axes.map((a) => {
           const [x1, y1] = polar(a.angle, INNER - 8);
           const [x2, y2] = polar(a.angle, R + 8);
           const [tx, ty] = polar(a.angle, R + 26);
@@ -172,7 +186,10 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
         </g>
         {layout.nodes.map((n) => {
           const [x, y] = polar(n.angle, n.r);
-          const right = n.axis === 'through' || x > 0;
+          // Etiqueta perpendicular al eje (como peldaños, no se pisan entre nodos vecinos);
+          // las que quedarían al revés se voltean para leerse de izquierda a derecha.
+          const deg = (n.angle * 180) / Math.PI;
+          const flip = deg > 90 && deg < 270;
           const active = n.axis === 'origin' && origin === n.label;
           const dim = hover && hover.kind === 'node' && hover.id !== n.id;
           return (
@@ -181,7 +198,7 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
               className={`pv-node${n.axis === 'origin' ? ' is-clickable' : ''}`}
               tabIndex={0}
               role={n.axis === 'origin' ? 'button' : undefined}
-              aria-label={`${AXIS[n.axis].title}: ${n.label}`}
+              aria-label={`${layout.axisByKey[n.axis].title}: ${n.label}`}
               opacity={dim ? 0.45 : 1}
               onPointerMove={(e) => show(e, 'node', n.id, nodeTip(n))}
               onFocus={(e) => show(e, 'node', n.id, nodeTip(n))}
@@ -191,7 +208,13 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
             >
               <circle cx={x} cy={y} r={11} fill="transparent" />
               <circle cx={x} cy={y} r={active ? 6 : 4.5} className={`pv-dot ${n.kind}${active ? ' is-active' : ''}`} />
-              <text x={x + (right ? 9 : -9)} y={y} dy="0.35em" textAnchor={right ? 'start' : 'end'} className={`pv-label${active ? ' is-active' : ''}`}>
+              <text
+                transform={`translate(${x},${y}) rotate(${flip ? deg + 180 : deg})`}
+                x={flip ? -9 : 9}
+                dy="0.35em"
+                textAnchor={flip ? 'end' : 'start'}
+                className={`pv-label${active ? ' is-active' : ''}`}
+              >
                 {n.label}
               </text>
             </g>
