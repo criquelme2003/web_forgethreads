@@ -171,7 +171,7 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
         </span>
         <span className="small muted">
           {view === 'chord'
-            ? `más oscuro = más indirecto · ancho = suma de ${metric} · la flecha apunta al destino · clic en un nodo para filtrar por ese origen`
+            ? `cada camino recorre sus intermedios · más oscuro = más indirecto · ancho = suma de ${metric} · pasa el cursor para ver un camino completo · clic en un nodo para filtrar por ese origen`
             : `más oscuro = más indirecto · grosor = ${metric} · clic en un origen para filtrar`}
         </span>
       </div>
