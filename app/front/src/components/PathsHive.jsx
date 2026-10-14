@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { fmtValue, orderColor, pathLabel, useWidth } from './pathsModel.js';
+import { fmtValue, maxValue, orderColor, orderLabels, pathLabel, useWidth } from './pathsModel.js';
 
 /**
  * Hive plot de efectos olvidados con tres ejes según el rol en el camino: Origen (From),
@@ -50,9 +50,9 @@ function buildLayout(paths, causes, effects, R) {
     used.dest.add(p.to);
   }
   const ordered = {
-    origin: causes.filter((c) => used.origin.has(c)),
-    through: [...causes, ...effects].filter((l) => used.through.has(l)),
-    dest: effects.filter((e) => used.dest.has(e)),
+    origin: orderLabels(used.origin, causes),
+    through: orderLabels(used.through, [...causes, ...effects]),
+    dest: orderLabels(used.dest, effects),
   };
   const nodes = [];
   const pos = {};
@@ -66,7 +66,7 @@ function buildLayout(paths, causes, effects, R) {
       nodes.push(node);
     });
   }
-  const max = Math.max(...paths.map((p) => p.value), 0);
+  const max = maxValue(paths);
   const lines = paths.map((p) => {
     const points = [pos.origin.get(p.from), ...p.through.map((t) => pos.through.get(t)), pos.dest.get(p.to)];
     const [x0, y0] = polar(points[0].angle, points[0].r);

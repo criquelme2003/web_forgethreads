@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { fmtValue, orderColor, pathLabel, useWidth } from './pathsModel.js';
+import { fmtValue, orderColor, orderLabels, pathLabel, useWidth } from './pathsModel.js';
 
 /**
  * Chord diagram de efectos olvidados: causas (origen) y efectos (destino) en un círculo, una
@@ -45,8 +45,11 @@ function buildLayout(paths, causes, effects) {
     weight.set(`c:${rb.from}`, (weight.get(`c:${rb.from}`) || 0) + rb.value);
     weight.set(`e:${rb.to}`, (weight.get(`e:${rb.to}`) || 0) + rb.value);
   }
-  const causeNodes = causes.filter((c) => weight.has(`c:${c}`)).map((label) => ({ id: `c:${label}`, label, kind: 'cause' }));
-  const effectNodes = effects.filter((e) => weight.has(`e:${e}`)).map((label) => ({ id: `e:${label}`, label, kind: 'effect' }));
+  // Nodos por rol (origen / destino) a partir de los caminos; las listas del proyecto solo ordenan.
+  const causeNodes = orderLabels(new Set(list.map((rb) => rb.from)), causes)
+    .map((label) => ({ id: `c:${label}`, label, kind: 'cause' }));
+  const effectNodes = orderLabels(new Set(list.map((rb) => rb.to)), effects)
+    .map((label) => ({ id: `e:${label}`, label, kind: 'effect' }));
   const nodes = [...causeNodes, ...effectNodes];
   if (!nodes.length) return null;
 

@@ -84,6 +84,22 @@ export function selectPaths(paths, { origin, orders, top }) {
   return out;
 }
 
+/**
+ * Etiquetas de `used` en el orden de `preferred` (las del proyecto) y, al final, las que no
+ * están en esa lista, ordenadas. Así ningún nodo de un camino queda sin posición aunque su
+ * etiqueta no coincida exactamente con las del proyecto.
+ */
+export function orderLabels(used, preferred) {
+  const known = preferred.filter((l) => used.has(l));
+  const knownSet = new Set(known);
+  const rest = [...used].filter((l) => !knownSet.has(l)).sort();
+  return [...known, ...rest];
+}
+
+export function maxValue(paths) {
+  return paths.reduce((m, p) => (p.value > m ? p.value : m), 0);
+}
+
 export function pathLabel(p) {
   return [p.from, ...p.through, p.to].join(' → ');
 }

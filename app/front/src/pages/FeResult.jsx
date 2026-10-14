@@ -4,6 +4,7 @@ import { apiFetch } from '../api.js';
 import PathsChord from '../components/PathsChord.jsx';
 import PathsHive from '../components/PathsHive.jsx';
 import PathsSankey from '../components/PathsSankey.jsx';
+import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
 import { orderBucket, orderColor, selectPaths, tablesToPaths } from '../components/pathsModel.js';
 
 const POLL_MS = 3000;
@@ -65,14 +66,16 @@ function OrderView({ jobId, table, causes, origin, onOriginChange }) {
         </span>
         <a className="btn" href={`/app/fe/jobs/${jobId}/paths_order_${table.order}.csv`}>Descargar CSV</a>
       </div>
-      <PathsSankey
-        columns={table.columns}
-        rows={sankeyRows}
-        metric={metric}
-        causes={causes}
-        origin={origin}
-        onOriginChange={onOriginChange}
-      />
+      <VizErrorBoundary resetKey={`${origin}|${top}|${metric}`}>
+        <PathsSankey
+          columns={table.columns}
+          rows={sankeyRows}
+          metric={metric}
+          causes={causes}
+          origin={origin}
+          onOriginChange={onOriginChange}
+        />
+      </VizErrorBoundary>
       <div style={{ overflow: 'auto', marginTop: 16 }}>
         <table>
           <thead>
@@ -168,15 +171,17 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
             : `más oscuro = más indirecto · grosor = ${metric} · clic en un origen para filtrar`}
         </span>
       </div>
-      <Chart
-        paths={shown}
-        orders={allOrders}
-        causes={causes}
-        effects={effects}
-        metric={metric}
-        origin={origin}
-        onOriginChange={onOriginChange}
-      />
+      <VizErrorBoundary resetKey={`${view}|${origin}|${top}|${metric}|${[...visibleOrders].join(',')}`}>
+        <Chart
+          paths={shown}
+          orders={allOrders}
+          causes={causes}
+          effects={effects}
+          metric={metric}
+          origin={origin}
+          onOriginChange={onOriginChange}
+        />
+      </VizErrorBoundary>
     </div>
   );
 }
