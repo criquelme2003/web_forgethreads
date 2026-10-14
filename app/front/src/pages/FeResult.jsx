@@ -5,7 +5,7 @@ import PathsChord from '../components/PathsChord.jsx';
 import PathsHive from '../components/PathsHive.jsx';
 import PathsSankey from '../components/PathsSankey.jsx';
 import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
-import { orderBucket, orderColor, selectPaths, tablesToPaths } from '../components/pathsModel.js';
+import { ORDER_RAMP, orderBucket, orderColor, selectPaths, tablesToPaths } from '../components/pathsModel.js';
 
 const POLL_MS = 3000;
 const PAGE_SIZE = 200;
@@ -160,18 +160,31 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
               aria-pressed={!off}
               onClick={() => toggle(item)}
             >
-              <svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" rx="2" fill={item.color} /></svg>
+              {view !== 'chord' && (
+                <svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" rx="2" fill={item.color} /></svg>
+              )}
               {item.key}
             </button>
           );
         })}
+        {view === 'chord' && (
+          <span className="pv-kind-legend small muted" aria-label="Color de cada tramo según su posición en el camino">
+            <span>
+              sale del origen
+              <svg width="70" height="10" aria-hidden="true">
+                {ORDER_RAMP.map((c, i) => <rect key={c} x={i * 14} width="13" height="10" rx="2" fill={c} />)}
+              </svg>
+              llega al destino
+            </span>
+          </span>
+        )}
         <span className="pv-kind-legend small muted">
           <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#4b5563" /></svg>Causa</span>
           <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#9ca3af" /></svg>Efecto</span>
         </span>
         <span className="small muted">
           {view === 'chord'
-            ? `cada camino recorre sus intermedios · más oscuro = más indirecto · ancho = suma de ${metric} · pasa el cursor para ver un camino completo · clic en un nodo para filtrar por ese origen`
+            ? `cada camino recorre sus intermedios, de claro (sale del origen) a oscuro (llega al destino) · ancho = suma de ${metric} · pasa el cursor para ver un camino completo · clic en un nodo para filtrar por ese origen`
             : `más oscuro = más indirecto · grosor = ${metric} · clic en un origen para filtrar`}
         </span>
       </div>

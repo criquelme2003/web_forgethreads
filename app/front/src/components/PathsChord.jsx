@@ -1,13 +1,15 @@
 import { useMemo, useRef, useState } from 'react';
-import { fmtValue, orderColor, orderLabels, pathLabel, useWidth } from './pathsModel.js';
+import { fmtValue, hopColor, orderLabels, pathLabel, useWidth } from './pathsModel.js';
 
 /**
  * Chord diagram dirigido de efectos olvidados. Cada etiqueta aparece una vez en el círculo
  * (primero las causas, luego los efectos), incluidas las que solo son intermedias.
  * Cada camino se dibuja completo, tramo a tramo (origen → intermedios → destino): una cinta
- * por (tramo, orden), coloreada por orden, con ancho proporcional a la suma de la métrica de
- * los caminos que la recorren y punta de flecha hacia el siguiente nodo. Al pasar el cursor por
- * un tramo o un nodo se resaltan completos todos los caminos que pasan por ahí.
+ * por (nodo de salida, nodo de llegada, posición del tramo), con ancho proporcional a la suma
+ * de la métrica de los caminos que la recorren y punta de flecha hacia el siguiente nodo.
+ * El color sigue el flujo dentro de cada camino: el tramo que sale del origen es el más claro
+ * y el que llega al destino el más oscuro, sea cual sea el largo del camino. Al pasar el cursor por un tramo o un nodo se resaltan
+ * completos todos los caminos que pasan por ahí.
  * Clic en un nodo que sea origen de algún camino: filtra por ese origen (otro clic lo quita).
  */
 
@@ -51,8 +53,10 @@ function buildLayout(paths, causes, effects) {
     p.through.forEach((t) => addRole('through', t, p.id));
     // Un tramo por par de nodos consecutivos; los tramos iguales del mismo orden se agrupan.
     for (let i = 0; i < seq.length - 1; i += 1) {
-      const key = `${seq[i]}\u0000${seq[i + 1]}\u0000${p.order}`;
-      const rb = ribbons.get(key) || { key, from: seq[i], to: seq[i + 1], order: p.order, value: 0, paths: [], pathIds: new Set() };
+      // Se agrupan los tramos iguales en la misma posición de caminos del mismo largo (mismo color).
+      const hops = seq.length - 1;
+      const key = `${seq[i]}\u0000${seq[i + 1]}\u0000${i}\u0000${hops}`;
+      const rb = ribbons.get(key) || { key, from: seq[i], to: seq[i + 1], hop: i, hops, value: 0, paths: [], pathIds: new Set() };
       if (!rb.pathIds.has(p.id)) {
         rb.value += p.value;
         rb.paths.push(p);
@@ -105,7 +109,7 @@ function buildLayout(paths, causes, effects) {
   // En cada nodo van primero las cintas que salen y luego las que llegan, por orden y por la
   // posición del otro extremo, para que se crucen menos.
   const index = new Map(nodes.map((n, i) => [n.id, i]));
-  const sorted = [...list].sort((a, b) => a.order - b.order
+  const sorted = [...list].sort((a, b) => a.hop - b.hop
     || index.get(a.to) - index.get(b.to) || index.get(a.from) - index.get(b.from));
   for (const rb of sorted) {
     const src = byId.get(rb.from);
@@ -114,7 +118,7 @@ function buildLayout(paths, causes, effects) {
     rb.s1 = src.cursor + span;
     src.cursor += span;
   }
-  for (const rb of [...sorted].sort((a, b) => a.order - b.order || index.get(b.from) - index.get(a.from))) {
+  for (const rb of [...sorted].sort((a, b) => a.hop - b.hop || index.get(b.from) - index.get(a.from))) {
     const dst = byId.get(rb.to);
     const span = (rb.value / total) * available;
     rb.t0 = dst.cursor;
@@ -124,7 +128,7 @@ function buildLayout(paths, causes, effects) {
   return { nodes, ribbons: sorted, causeCount };
 }
 
-export default function PathsChord({ paths, orders, causes, effects, metric, origin, onOriginChange }) {
+export default function PathsChord({ paths, causes, effects, metric, origin, onOriginChange }) {
   const wrapRef = useRef(null);
   const width = useWidth(wrapRef);
   const [hover, setHover] = useState(null); // { kind: 'ribbon'|'node', id, pathIds, tip }
@@ -162,7 +166,7 @@ export default function PathsChord({ paths, orders, causes, effects, metric, ori
     return {
       value: fmtValue(rb.value),
       title: `Tramo ${rb.from} → ${rb.to}`,
-      detail: `orden ${rb.order} · en ${rb.paths.length} camino${rb.paths.length === 1 ? '' : 's'}`,
+      detail: `tramo ${rb.hop + 1} de ${rb.hops} · en ${rb.paths.length} camino${rb.paths.length === 1 ? '' : 's'} · orden ${[...new Set(rb.paths.map((p) => p.order))].sort((a, b) => a - b).join(', ')}`,
       lines: topLines(rb.paths),
     };
   }
@@ -205,7 +209,7 @@ export default function PathsChord({ paths, orders, causes, effects, metric, ori
               <path
                 key={rb.key}
                 d={ribbonPath(rb.s0, rb.s1, rb.t0, rb.t1, r - 2)}
-                fill={orderColor(rb.order, orders)}
+                fill={hopColor(rb.hop, rb.hops)}
                 fillOpacity={hover ? (on ? 0.9 : 0.07) : 0.7}
                 className="pv-ribbon"
                 onPointerMove={(e) => show(e, 'ribbon', rb.key, rb.pathIds, ribbonTip(rb))}
