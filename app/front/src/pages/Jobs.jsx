@@ -21,7 +21,6 @@ export default function Jobs() {
   const [jobs, setJobs] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [auto, setAuto] = useState(true);
-  const [detail, setDetail] = useState(null);
   const [dbPath, setDbPath] = useState('data/jobs.db');
   const autoRef = useRef(true);
   autoRef.current = auto;
@@ -52,14 +51,6 @@ export default function Jobs() {
     }, 2000);
     return () => clearInterval(iv);
   }, [filter, fetchJobs]);
-
-  async function showDetail(id) {
-    try {
-      const d = await apiJson(`/app/jobs/${id}`);
-      setDetail({ id, json: JSON.stringify(d, null, 2) });
-      document.getElementById('detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    } catch {}
-  }
 
   const emptyLabel = filter ? `(${filter})` : '';
 
@@ -94,7 +85,7 @@ export default function Jobs() {
               <tr><td colSpan="8" className="empty">Sin trabajos {emptyLabel}</td></tr>
             )}
             {jobs !== null && jobs.map((j) => (
-              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => (j.kind === 'fe' ? navigate(`/fe/jobs/${j.job_id}`) : showDetail(j.job_id))}>
+              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => navigate(j.kind === 'fe' ? `/fe/jobs/${j.job_id}` : `/maxmin/jobs/${j.job_id}`)}>
                 <td className="mono">{j.job_id}</td>
                 <td>{KIND_LABELS[j.kind] || j.kind}</td>
                 <td onClick={(e) => e.stopPropagation()}>
@@ -110,15 +101,6 @@ export default function Jobs() {
           </tbody>
         </table>
       </div>
-      {detail && (
-        <div id="detail" style={{ marginTop: 16, border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: '#f9fafb' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: '#374151', marginBottom: 8 }}>
-            Detalle <span className="mono">{detail.id}</span>
-          </div>
-          <pre className="mono" style={{ background: '#fff', border: '1px solid var(--border)', padding: 10, borderRadius: 6, overflow: 'auto', fontSize: 12, margin: 0, whiteSpace: 'pre-wrap' }}>{detail.json}</pre>
-        </div>
-      )}
-      {!detail && <div id="detail" hidden />}
     </div>
   );
 }

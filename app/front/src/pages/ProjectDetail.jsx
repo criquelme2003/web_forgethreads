@@ -472,8 +472,8 @@ function SimulationJobs({ project, refreshKey }) {
               const p = j.params || {};
               return (
                 <tr key={j.job_id}>
-                  <td className="mono">{j.job_id}</td>
-                  <td><span className={`badge ${jobBadge(j.status)}`} title={j.logs || undefined}>{j.status}</span></td>
+                  <td className="mono"><Link to={`/maxmin/jobs/${j.job_id}`}>{j.job_id}</Link></td>
+                  <td><span className={`badge ${jobBadge(j.status)}`}>{j.status}</span></td>
                   <td>{p.numero_nodos ?? '—'}</td>
                   <td>{p.conectividad_promedio ?? '—'}</td>
                   <td>{p.threshold ?? '—'}</td>

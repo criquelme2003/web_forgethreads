@@ -20,7 +20,8 @@ export default function Layout() {
   const { pathname } = useLocation();
   const section = SECTIONS[pathname]
     || (pathname.startsWith('/fe/') ? 'Caminos' : '')
-    || (pathname.startsWith('/projects/') ? 'Proyectos' : '');
+    || (pathname.startsWith('/projects/') ? 'Proyectos' : '')
+    || (pathname.startsWith('/maxmin/') ? 'MaxMin' : '');
   return (
     <>
       <header className="topbar">

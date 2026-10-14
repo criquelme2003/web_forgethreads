@@ -6,6 +6,7 @@ import GpuStatus from './pages/GpuStatus.jsx';
 import ClusterStatus from './pages/ClusterStatus.jsx';
 import FeExecute from './pages/FeExecute.jsx';
 import FeResult from './pages/FeResult.jsx';
+import MaxMinResult from './pages/MaxMinResult.jsx';
 import Projects from './pages/Projects.jsx';
 import ProjectDetail from './pages/ProjectDetail.jsx';
 import ExpertInvite from './pages/ExpertInvite.jsx';
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="/cluster_status" element={<ClusterStatus />} />
           <Route path="/fe" element={<FeExecute />} />
           <Route path="/fe/jobs/:jobId" element={<FeResult />} />
+          <Route path="/maxmin/jobs/:jobId" element={<MaxMinResult />} />
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Route>

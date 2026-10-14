@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import get_job_store, require_user
 from app.services.job_store import JobNotFoundError, JobRecord, JobStore
+from app.services.maxmin_log import parse_maxmin_log
 
 router = APIRouter(tags=["jobs"])
 
@@ -119,3 +120,41 @@ async def get_job(
     except JobNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown job_id: {job_id}")
     return JobStatusResponse.from_record(record)
+
+
+class EffectsByOrder(BaseModel):
+    order: int
+    count: int
+
+
+class MaxMinResultResponse(BaseModel):
+    job: JobStatusResponse
+    effects_by_order: list[EffectsByOrder]
+    convergence_step: int | None = None
+    m: int | None = None
+    b: int | None = None
+    order_limit: int | None = None
+
+
+@router.get("/app/maxmin/jobs/{job_id}", response_model=MaxMinResultResponse)
+async def get_maxmin_result(
+    job_id: str,
+    user: Annotated[str, Depends(require_user)],
+    store: Annotated[JobStore, Depends(get_job_store)],
+) -> MaxMinResultResponse:
+    """Job MaxMin con los efectos por orden leídos de su log (vacío mientras está pendiente)."""
+    try:
+        record = await store.get(job_id)
+    except JobNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown job_id: {job_id}")
+    if record.kind != "maxmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"El job {job_id} no es un cálculo MaxMin")
+    parsed = parse_maxmin_log(record.logs)
+    return MaxMinResultResponse(
+        job=JobStatusResponse.from_record(record),
+        effects_by_order=[EffectsByOrder(order=o, count=c) for o, c in parsed.effects_by_order],
+        convergence_step=parsed.convergence_step,
+        m=parsed.m,
+        b=parsed.b,
+        order_limit=parsed.order_limit,
+    )
