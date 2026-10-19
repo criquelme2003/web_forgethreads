@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiFetch } from '../api.js';
-import PathsChord from '../components/PathsChord.jsx';
 import PathsHive from '../components/PathsHive.jsx';
 import PathsSankey from '../components/PathsSankey.jsx';
 import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
@@ -18,7 +17,6 @@ const TOP_OPTIONS = [25, 50, 100, 200];
 
 const VIEWS = [
   { key: 'sankey', label: 'Sankey por orden' },
-  { key: 'chord', label: 'Chord' },
   { key: 'hive', label: 'Hive plot' },
 ];
 
@@ -97,8 +95,8 @@ function OrderView({ jobId, table, causes, origin, onOriginChange }) {
   );
 }
 
-/** Chord / hive plot con todos los órdenes juntos, coloreados por orden. */
-function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange }) {
+/** Hive plot con todos los órdenes juntos, coloreados por orden. */
+function MultiOrderView({ tables, causes, effects, origin, onOriginChange }) {
   const metrics = ['Mean', 'Count'].filter((m) => tables[0]?.columns.includes(m));
   const [metric, setMetric] = useState(metrics[0] || 'Mean');
   const [top, setTop] = useState(50);
@@ -132,7 +130,6 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
     });
   }
 
-  const Chart = view === 'chord' ? PathsChord : PathsHive;
   return (
     <div>
       <div className="controls">
@@ -143,7 +140,7 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
         </select>
         {metrics.length > 1 && (
           <select value={metric} onChange={(e) => setMetric(e.target.value)} aria-label="Métrica">
-            {metrics.map((m) => <option key={m} value={m}>{view === 'chord' ? 'Ancho' : 'Grosor'}: {m}</option>)}
+            {metrics.map((m) => <option key={m} value={m}>Grosor: {m}</option>)}
           </select>
         )}
         <span className="small muted">{shown.length} de {total} caminos</span>
@@ -170,13 +167,11 @@ function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange 
           <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#9ca3af" /></svg>Efecto</span>
         </span>
         <span className="small muted">
-          {view === 'chord'
-            ? `más oscuro = más indirecto · ancho = suma de ${metric} · la flecha apunta al destino · clic en un nodo para filtrar por ese origen`
-            : `más oscuro = más indirecto · grosor = ${metric} · clic en un origen para filtrar`}
+          más oscuro = más indirecto · grosor = {metric} · clic en un origen para filtrar
         </span>
       </div>
-      <VizErrorBoundary resetKey={`${view}|${origin}|${top}|${metric}|${[...visibleOrders].join(',')}`}>
-        <Chart
+      <VizErrorBoundary resetKey={`${origin}|${top}|${metric}|${[...visibleOrders].join(',')}`}>
+        <PathsHive
           paths={shown}
           orders={allOrders}
           causes={causes}
@@ -312,10 +307,8 @@ export default function FeResult() {
           {paths && paths.tables.length === 0 && (
             <div className="empty">No hay efectos olvidados con THR = {params.thr}.</div>
           )}
-          {paths && paths.tables.length > 0 && view !== 'sankey' && (
+          {paths && paths.tables.length > 0 && view === 'hive' && (
             <MultiOrderView
-              key={view}
-              view={view}
               tables={paths.tables}
               causes={paths.causes}
               effects={paths.effects}
