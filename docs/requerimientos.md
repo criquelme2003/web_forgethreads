@@ -42,7 +42,7 @@ La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálc
 |---|---|
 | RF-10 | El admin invita a expertos por correo. Se genera un enlace con un token de un solo uso; solo se guarda su hash. **[supuesto]** El enlace expira a los 14 días. |
 | RF-11 | El token se consume al confirmar el envío del input, no al abrir el enlace. |
-| RF-12 | Envío configurable: `manual` (por ahora; el sistema muestra el enlace y el admin lo copia y lo envía) o `smtp` (futuro). Mientras sea manual, la identidad del experto la garantiza el admin. |
+| RF-12 | Envío configurable con `INVITATION_DELIVERY`: `manual` (por defecto; el sistema muestra el enlace y el admin lo copia y lo envía) o `smtp` (además del enlace, se envía por correo con la configuración `SMTP_*`; puerto 465 = SSL implícito). En modo manual, la identidad del experto la garantiza el admin. |
 | RF-13 | El admin puede revocar una invitación pendiente o regenerarla, lo que invalida el token anterior. |
 | RF-14 | Las invitaciones solo se aceptan mientras el proyecto está `abierto`. |
 
@@ -169,7 +169,6 @@ Computation       id, project_id, tipo (fe_experto|fe_agregado|maxmin|barrido),
 
 ## 8. Fuera de alcance por ahora
 
-- Envío real de correos (SMTP).
 - Proyectos compartidos entre administradores.
 - Acceso del experto a sus resultados.
 - Ver el avance de un barrido mientras corre.
