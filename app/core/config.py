@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     scripts_wf_dir: str = "scripts_wf"  # ruta remota (relativa a $HOME del usuario SSH) del repo scripts_wf
     session_max_age_seconds: int = 15 * 24 * 60 * 60  # debe coincidir con SessionMiddleware(max_age=...)
     session_idle_timeout_seconds: int = 24 * 60 * 60  # inactividad máxima antes de expirar la sesión (sliding window)
-    jobs_db_path: str = "data/jobs.db"  # sqlite para persistencia de cola
+    # Base de datos: URL de SQLAlchemy (ej. postgresql://usuario:clave@host:5432/base).
+    # Sin DATABASE_URL se usa SQLite en jobs_db_path (desarrollo local y tests).
+    database_url: str | None = None
+    jobs_db_path: str = "data/jobs.db"
     fe_results_dir: str = "data/fe_results"  # caché local de los CSV de caminos descargados de fe_job
 
     # --- Invitaciones a expertos ---
@@ -53,6 +56,10 @@ class Settings(BaseSettings):
     smtp_password: str | None = None
     smtp_from: str | None = None  # remitente; si falta se usa smtp_username
     smtp_timeout: int = 15
+
+    @property
+    def effective_database_url(self) -> str:
+        return self.database_url or self.jobs_db_path
 
     @property
     def smtp_enabled(self) -> bool:

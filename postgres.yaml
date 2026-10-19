@@ -1,0 +1,146 @@
+# PostgreSQL propio de web-forgethreads, con respaldo diario.
+#
+# Antes de aplicar, crear el secret con la contraseña (hexadecimal: va dentro de DATABASE_URL
+# sin escapar caracteres):
+#   kubectl create secret generic wf-postgres -n criquelme \
+#     --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+#
+# Pasos completos (despliegue, copia de la base SQLite, restaurar un respaldo) en
+# docs/despliegue.md.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: wf-postgres
+  namespace: criquelme
+spec:
+  selector:
+    app: wf-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wf-postgres
+  namespace: criquelme
+spec:
+  serviceName: wf-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wf-postgres
+  template:
+    metadata:
+      labels:
+        app: wf-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              value: wf
+            - name: POSTGRES_DB
+              value: wf
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wf-postgres
+                  key: POSTGRES_PASSWORD
+            # Subdirectorio: initdb exige un directorio vacío y la raíz del volumen puede no serlo.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "wf", "-d", "wf", "-h", "127.0.0.1"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "wf", "-d", "wf", "-h", "127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+
+        # Respaldo diario con pg_dump en un volumen aparte (no hay permisos para CronJobs).
+        # Guarda wf-AAAAMMDD-HHMMSS.sql.gz y borra los de más de RETENTION_DAYS días.
+        - name: backup
+          image: postgres:17-alpine
+          env:
+            - name: PGHOST
+              value: 127.0.0.1
+            - name: PGUSER
+              value: wf
+            - name: PGDATABASE
+              value: wf
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wf-postgres
+                  key: POSTGRES_PASSWORD
+            - name: RETENTION_DAYS
+              value: "14"
+            - name: INTERVAL_SECONDS
+              value: "86400"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                until pg_isready -q; do sleep 5; done
+                f="/backups/wf-$(date -u +%Y%m%d-%H%M%S).sql"
+                # Sin tubería: un pg_dump fallido no deja un .gz que parezca válido.
+                if pg_dump --no-owner -f "$f.tmp" && gzip -c "$f.tmp" > "$f.gz.tmp"; then
+                  mv "$f.gz.tmp" "$f.gz"
+                  echo "respaldo listo: $f.gz"
+                else
+                  echo "falló el respaldo" >&2
+                fi
+                rm -f "$f.tmp" "$f.gz.tmp"
+                find /backups -name 'wf-*.sql.gz' -mtime +"$RETENTION_DAYS" -delete
+                sleep "$INTERVAL_SECONDS"
+              done
+          volumeMounts:
+            - name: backups
+              mountPath: /backups
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        storageClassName: csi-cephfs-sc
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 2Gi
+    - metadata:
+        name: backups
+      spec:
+        storageClassName: csi-cephfs-sc
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 2Gi

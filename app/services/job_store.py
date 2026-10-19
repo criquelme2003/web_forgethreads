@@ -1,11 +1,14 @@
-import asyncio
-import json
 import secrets
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal
+
+from sqlalchemy import delete, insert, select, update
+from sqlalchemy.engine import Row
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.db.engine import get_engine
+from app.db.schema import jobs
 
 JobStatus = Literal["pending", "success", "error", "partial"]
 JobKind = Literal["maxmin", "fe"]
@@ -33,160 +36,73 @@ class JobRecord:
     input_id: int | None = None  # input de experto que originó el cálculo (proyectos de expertos)
 
 
-_COLUMNS = (
-    "job_id, status, node, token, effective_order, computation_time_s, logs, "
-    "created_at, updated_at, kind, params, result, project_id, input_id"
-)
-_PLACEHOLDERS = ",".join("?" * len(_COLUMNS.split(",")))
-# Columnas agregadas después de la versión inicial de la tabla: se crean si faltan.
-_ADDED_COLUMNS = {
-    "kind": "TEXT NOT NULL DEFAULT 'maxmin'",
-    "params": "TEXT",
-    "result": "TEXT",
-    "project_id": "INTEGER",
-    "input_id": "INTEGER",
-}
-
-
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """Crea la tabla si no existe y agrega las columnas nuevas a bases antiguas (idempotente)."""
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS jobs (
-            job_id TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            node TEXT NOT NULL,
-            token TEXT NOT NULL,
-            effective_order INTEGER,
-            computation_time_s REAL,
-            logs TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
-    for column, ddl in _ADDED_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {ddl}")
-    conn.commit()
-
-
-def _dump(value: dict | None) -> str | None:
-    return None if value is None else json.dumps(value, ensure_ascii=False)
-
-
-def _load(value: str | None) -> dict | None:
-    if not value:
-        return None
+def resolve_database(database: str | None) -> str:
+    """URL o ruta de la base: la indicada o la de la configuración (`DATABASE_URL`/`JOBS_DB_PATH`)."""
+    if database is not None:
+        return database
     try:
-        data = json.loads(value)
-    except ValueError:
-        return None
-    return data if isinstance(data, dict) else None
+        from app.core.config import get_settings
 
-
-def _parse_dt(s: str) -> datetime:
-    try:
-        # ISO8601 con Z o sin
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt
-    except Exception:
-        return datetime.now(UTC)
+        return get_settings().effective_database_url
+    except Exception:  # noqa: BLE001  (sin .env: SQLite por defecto)
+        return "data/jobs.db"
 
 
 class JobStore:
-    """Registro persistente en sqlite de jobs SLURM. Reemplaza dict in-memory para sobrevivir reinicios."""
+    """Registro persistente de los jobs SLURM (SQLite o PostgreSQL, según la configuración)."""
 
-    def __init__(self, db_path: str | None = None) -> None:
-        self._db_path = db_path  # si None, se resuelve lazy desde Settings
-        self._lock = asyncio.Lock()
-        self._init_done = False
+    def __init__(self, database: str | None = None) -> None:
+        # URL de SQLAlchemy o ruta de un archivo SQLite; si es None, se resuelve desde Settings.
+        self._database = database
 
-    def _resolve_db_path(self) -> str:
-        if self._db_path is not None:
-            return self._db_path
-        try:
-            from app.core.config import get_settings
-
-            p = get_settings().jobs_db_path
-            return p or "data/jobs.db"
-        except Exception:
-            return "data/jobs.db"
-
-    def _ensure_db(self) -> None:
-        db_path = self._resolve_db_path()
-        # :memory: no crea directorio
-        if db_path != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        # usa URI para :memory: compartido entre conexiones si se requiere
-        uri_path = db_path
-        if db_path == ":memory:":
-            # file memdb con shared cache para que múltiples conexiones vean misma tabla
-            uri_path = "file:memdb1?mode=memory&cache=shared"
-            conn = sqlite3.connect(uri_path, uri=True, check_same_thread=False)
-        else:
-            conn = sqlite3.connect(uri_path, check_same_thread=False)
-        try:
-            _ensure_schema(conn)
-        finally:
-            conn.close()
-
-    def _connect(self) -> sqlite3.Connection:
-        db_path = self._resolve_db_path()
-        # asegura tabla en cada conexión (necesario para :memory: y nuevos archivos)
-        if db_path == ":memory:":
-            uri_path = "file:memdb1?mode=memory&cache=shared"
-            conn = sqlite3.connect(uri_path, uri=True, check_same_thread=False)
-        else:
-            # asegura directorio
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        _ensure_schema(conn)
-        return conn
+    async def _engine(self) -> AsyncEngine:
+        return await get_engine(resolve_database(self._database))
 
     @staticmethod
-    def _row_to_record(row: sqlite3.Row) -> JobRecord:
+    def _row_to_record(row: Row) -> JobRecord:
+        m = row._mapping
         return JobRecord(
-            job_id=row["job_id"],
-            status=row["status"],  # type: ignore
-            node=row["node"],
-            token=row["token"],
-            effective_order=row["effective_order"],
-            computation_time_s=row["computation_time_s"],
-            logs=row["logs"],
-            created_at=_parse_dt(row["created_at"]),
-            updated_at=_parse_dt(row["updated_at"]),
-            kind=row["kind"],  # type: ignore
-            params=_load(row["params"]),
-            result=_load(row["result"]),
-            project_id=row["project_id"],
-            input_id=row["input_id"],
+            job_id=m["job_id"],
+            status=m["status"],
+            node=m["node"],
+            token=m["token"],
+            effective_order=m["effective_order"],
+            computation_time_s=m["computation_time_s"],
+            logs=m["logs"],
+            created_at=m["created_at"],
+            updated_at=m["updated_at"],
+            kind=m["kind"],
+            params=m["params"],
+            result=m["result"],
+            project_id=m["project_id"],
+            input_id=m["input_id"],
         )
 
     @staticmethod
-    def _record_values(record: JobRecord) -> tuple:
-        return (
-            record.job_id,
-            record.status,
-            record.node,
-            record.token,
-            record.effective_order,
-            record.computation_time_s,
-            record.logs,
-            record.created_at.isoformat(),
-            record.updated_at.isoformat(),
-            record.kind,
-            _dump(record.params),
-            _dump(record.result),
-            record.project_id,
-            record.input_id,
-        )
+    def _record_values(record: JobRecord) -> dict:
+        return {
+            "job_id": record.job_id,
+            "status": record.status,
+            "node": record.node,
+            "token": record.token,
+            "effective_order": record.effective_order,
+            "computation_time_s": record.computation_time_s,
+            "logs": record.logs,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+            "kind": record.kind,
+            "params": record.params,
+            "result": record.result,
+            "project_id": record.project_id,
+            "input_id": record.input_id,
+        }
+
+    async def _replace(self, record: JobRecord) -> None:
+        """Inserta el registro reemplazando el que tenga el mismo job_id."""
+        engine = await self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(delete(jobs).where(jobs.c.job_id == record.job_id))
+            await conn.execute(insert(jobs).values(**self._record_values(record)))
 
     async def create(
         self,
@@ -204,29 +120,16 @@ class JobStore:
             job_id=job_id, status="pending", node=node, created_at=now, updated_at=now, token=token,
             kind=kind, params=params, project_id=project_id, input_id=input_id,
         )
-        async with self._lock:
-            conn = self._connect()
-            try:
-                conn.execute(
-                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
-                    self._record_values(record),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+        await self._replace(record)
         return record
 
     async def verify_token(self, job_id: str, token: str) -> bool:
-        async with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute("SELECT token FROM jobs WHERE job_id=?", (job_id,))
-                row = cur.fetchone()
-            finally:
-                conn.close()
-        if row is None:
+        engine = await self._engine()
+        async with engine.connect() as conn:
+            stored = await conn.scalar(select(jobs.c.token).where(jobs.c.job_id == job_id))
+        if stored is None:
             return False
-        return secrets.compare_digest(row["token"], token or "")
+        return secrets.compare_digest(stored, token or "")
 
     async def mark_error(self, job_id: str, node: str, logs: str) -> JobRecord:
         """Registra un job que quedó encolado en SLURM pero cuyo notifier no se pudo lanzar."""
@@ -234,29 +137,22 @@ class JobStore:
         record = JobRecord(
             job_id=job_id, status="error", node=node, created_at=now, updated_at=now, logs=logs, token=""
         )
-        # si ya existe, conserva token y created_at
-        async with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute(
-                    "SELECT token, created_at, kind, params, project_id, input_id FROM jobs WHERE job_id=?",
-                    (job_id,),
-                )
-                existing = cur.fetchone()
-                if existing:
-                    record.token = existing["token"]
-                    record.created_at = _parse_dt(existing["created_at"])
-                    record.kind = existing["kind"]
-                    record.params = _load(existing["params"])
-                    record.project_id = existing["project_id"]
-                    record.input_id = existing["input_id"]
-                conn.execute(
-                    f"INSERT OR REPLACE INTO jobs ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
-                    self._record_values(record),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+        engine = await self._engine()
+        async with engine.begin() as conn:
+            # si ya existe, conserva token, created_at y el origen del cálculo
+            existing = (
+                await conn.execute(select(jobs).where(jobs.c.job_id == job_id))
+            ).first()
+            if existing:
+                old = self._row_to_record(existing)
+                record.token = old.token
+                record.created_at = old.created_at
+                record.kind = old.kind
+                record.params = old.params
+                record.project_id = old.project_id
+                record.input_id = old.input_id
+            await conn.execute(delete(jobs).where(jobs.c.job_id == job_id))
+            await conn.execute(insert(jobs).values(**self._record_values(record)))
         return record
 
     async def update_from_callback(
@@ -268,86 +164,57 @@ class JobStore:
         logs: str | None = None,
         result: dict | None = None,
     ) -> JobRecord:
-        async with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,))
-                row = cur.fetchone()
-                if row is None:
-                    raise JobNotFoundError(f"Unknown job_id: {job_id}")
-                # actualiza
-                now = datetime.now(UTC)
-                conn.execute(
-                    "UPDATE jobs SET status=?, effective_order=?, computation_time_s=?, logs=?, "
-                    "result=?, updated_at=? WHERE job_id=?",
-                    (
-                        status, effective_order, computation_time_s, logs, _dump(result),
-                        now.isoformat(), job_id,
-                    ),
+        engine = await self._engine()
+        async with engine.begin() as conn:
+            updated = await conn.execute(
+                update(jobs)
+                .where(jobs.c.job_id == job_id)
+                .values(
+                    status=status,
+                    effective_order=effective_order,
+                    computation_time_s=computation_time_s,
+                    logs=logs,
+                    result=result,
+                    updated_at=datetime.now(UTC),
                 )
-                conn.commit()
-                cur = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,))
-                row = cur.fetchone()
-                return self._row_to_record(row)
-            finally:
-                conn.close()
+            )
+            if updated.rowcount == 0:
+                raise JobNotFoundError(f"Unknown job_id: {job_id}")
+            row = (await conn.execute(select(jobs).where(jobs.c.job_id == job_id))).one()
+        return self._row_to_record(row)
 
     async def get(self, job_id: str) -> JobRecord:
-        async with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,))
-                row = cur.fetchone()
-                if row is None:
-                    raise JobNotFoundError(f"Unknown job_id: {job_id}")
-                return self._row_to_record(row)
-            finally:
-                conn.close()
+        engine = await self._engine()
+        async with engine.connect() as conn:
+            row = (await conn.execute(select(jobs).where(jobs.c.job_id == job_id))).first()
+        if row is None:
+            raise JobNotFoundError(f"Unknown job_id: {job_id}")
+        return self._row_to_record(row)
 
     async def list_all(self) -> list[JobRecord]:
-        async with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC")
-                rows = cur.fetchall()
-                return [self._row_to_record(r) for r in rows]
-            finally:
-                conn.close()
+        engine = await self._engine()
+        async with engine.connect() as conn:
+            rows = await conn.execute(select(jobs).order_by(jobs.c.created_at.desc()))
+            return [self._row_to_record(r) for r in rows]
 
     async def list_by_project(self, project_id: int) -> list[JobRecord]:
-        async with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute(
-                    "SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC", (project_id,)
-                )
-                return [self._row_to_record(r) for r in cur.fetchall()]
-            finally:
-                conn.close()
+        engine = await self._engine()
+        async with engine.connect() as conn:
+            rows = await conn.execute(
+                select(jobs)
+                .where(jobs.c.project_id == project_id)
+                .order_by(jobs.c.created_at.desc())
+            )
+            return [self._row_to_record(r) for r in rows]
 
     # compat con código antiguo que usaba list()
     async def list(self) -> list[JobRecord]:
         return await self.list_all()
 
     async def clear(self) -> None:
-        async with self._lock:
-            conn = self._connect()
-            try:
-                conn.execute("DELETE FROM jobs")
-                conn.commit()
-            finally:
-                conn.close()
-
-    # sync helper para tests que no quieren async
-    def clear_sync(self) -> None:
-        self._ensure_db()
-        db_path = self._resolve_db_path()
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        try:
-            conn.execute("DELETE FROM jobs")
-            conn.commit()
-        finally:
-            conn.close()
+        engine = await self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(delete(jobs))
 
 
 # Singleton a nivel de módulo: se importa directamente en vez de pasar por

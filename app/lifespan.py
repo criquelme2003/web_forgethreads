@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.config import get_settings
+from app.db.engine import display_url, dispose_engines, get_engine
 from app.repositories.slurm import SlurmRepository
 from app.services.demo_seed import seed_demo
 from app.services.node_selector import NodeSelector
@@ -37,6 +38,15 @@ async def global_lifespan(app: FastAPI):
         print("No SSH nodes configured (revisa .env CUDA*_IP)")
         logger.warning("No SSH nodes configured")
     
+    # Aplica las migraciones al arrancar para que un problema con la base se vea en el log de
+    # inicio; si falla, la app arranca igual y se reintenta en la primera consulta.
+    database = settings.effective_database_url
+    try:
+        await get_engine(database)
+        logger.info("Base de datos lista: %s", display_url(database))
+    except Exception as e:  # noqa: BLE001
+        logger.error("No se pudo preparar la base de datos %s: %s", display_url(database), e)
+
     if settings.seed_demo_data:
         try:
             await seed_demo(project_store, owner=settings.auth_username)
@@ -52,3 +62,4 @@ async def global_lifespan(app: FastAPI):
         logger.warning("Error closing pool: %s", e)
     finally:
         clear_singletons()
+        await dispose_engines()

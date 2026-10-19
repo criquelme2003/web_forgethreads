@@ -1,7 +1,6 @@
 import asyncio
 import io
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,16 +8,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select, update
 
 import app.api.fe as fe_api
 import app.api.projects as projects_api
 from app.api.deps import get_job_store, get_node_selector, get_project_store, get_ssh_pool
 from app.core.config import Settings, get_settings
+from app.db.schema import expert_invitations
 from app.main import app
 from app.services.job_store import JobStore
 from app.services.mailer import MailError
 from app.services.project_store import MIGRATED_PROJECT_NAME, ProjectStore, hash_token
-from tests.conftest import TEST_PASSWORD, TEST_USERNAME
+from tests.conftest import TEST_PASSWORD, TEST_USERNAME, run_sql
 from tests.test_fe_input import CC, CE, EE
 
 EXPERT_PROJECT = {
@@ -82,9 +83,9 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
 
 
 @pytest.fixture
-def env(tmp_path: Path, monkeypatch):
+def env(tmp_path: Path, database: str, monkeypatch):
     pool = FakePool()
-    db = str(tmp_path / "jobs.db")
+    db = database
     store = JobStore(db)
     projects = ProjectStore(db)
     uploads: list[dict] = []
@@ -263,9 +264,7 @@ def test_invitation_stores_only_token_hash(env) -> None:
     assert body["email"] == "experta@example.com"
     assert env["mails"] == []
 
-    conn = sqlite3.connect(env["db"])
-    stored = conn.execute("SELECT token_hash FROM expert_invitations").fetchone()[0]
-    conn.close()
+    stored = run_sql(env["db"], select(expert_invitations.c.token_hash))[0][0]
     assert stored == hash_token(token) and token not in stored
 
     listed = client.get(f"/app/projects/{pid}/invitations").json()
@@ -323,10 +322,8 @@ def test_expired_invitation(env) -> None:
     client = env["client"]
     pid = _open_project(client)["id"]
     _, token = _invite(client, pid)
-    conn = sqlite3.connect(env["db"])
-    conn.execute("UPDATE expert_invitations SET expira_at=?", ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(),))
-    conn.commit()
-    conn.close()
+    expired = datetime.now(UTC) - timedelta(seconds=1)
+    run_sql(env["db"], update(expert_invitations).values(expira_at=expired))
 
     res = _anon(client).get(f"/app/invite/{token}")
     assert res.status_code == 410 and "expiró" in res.json()["detail"]
@@ -527,8 +524,8 @@ def test_maxmin_belongs_to_simulation_project(env) -> None:
     assert _maxmin(client, sim["id"]).status_code == 409
 
 
-def test_old_maxmin_jobs_are_migrated(tmp_path: Path) -> None:
-    db = str(tmp_path / "jobs.db")
+def test_old_maxmin_jobs_are_migrated(database: str) -> None:
+    db = database
     store = JobStore(db)
     asyncio.run(store.create("1", node="cuda1"))
     asyncio.run(store.create("2", node="cuda1", kind="fe"))

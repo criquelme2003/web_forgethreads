@@ -5,12 +5,13 @@ from pydantic import BaseModel
 
 from app.api.deps import require_user
 from app.core.config import Settings, get_settings
+from app.db.engine import display_url
 
 router = APIRouter(tags=["meta"], prefix="/app")
 
 
 class UiMetaResponse(BaseModel):
-    jobs_db_path: str
+    database: str  # URL de la base, sin contraseña
     gpu_idle_threshold: int
 
 
@@ -20,4 +21,7 @@ async def ui_meta(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> UiMetaResponse:
     """Valores de configuración que el SPA muestra en pantalla (antes interpolados por Jinja)."""
-    return UiMetaResponse(jobs_db_path=settings.jobs_db_path, gpu_idle_threshold=settings.gpu_idle_threshold)
+    return UiMetaResponse(
+        database=display_url(settings.effective_database_url),
+        gpu_idle_threshold=settings.gpu_idle_threshold,
+    )

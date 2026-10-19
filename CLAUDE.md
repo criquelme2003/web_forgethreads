@@ -7,6 +7,8 @@ Backend FastAPI + SPA React que lanza cómputos MaxMin como jobs SLURM en un clu
 ```bash
 uv sync --dev                                   # dependencias
 uv run pytest                                   # tests (requiere AUTH_USERNAME, AUTH_PASSWORD, SESSION_SECRET_KEY; ver CI)
+TEST_DATABASE_URL=postgresql://... uv run pytest # mismos tests contra PostgreSQL (la base se vacía en cada test)
+uv run alembic revision --autogenerate -m "..."  # migración tras cambiar app/db/schema.py; `uv run alembic check` verifica
 uv run ruff check app tests                     # lint
 npm ci --prefix app/front && npm run build --prefix app/front   # build del SPA → app/front/dist
 uv run uvicorn app.main:app --reload            # servidor local
@@ -17,10 +19,12 @@ uv run uvicorn app.main:app --reload            # servidor local
 ## Arquitectura
 
 - `app/api/` — routers FastAPI. Dependencias compartidas en `api/deps.py` (`require_user`, `get_job_store`, `get_ssh_pool`, `get_node_selector`); usarlas siempre en vez de instanciar servicios en el router.
-- `app/services/` — lógica: `job_store` (SQLite), `project_store` (proyectos, invitaciones e inputs; misma base), `mailer` (SMTP de invitaciones), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
+- `app/db/` — SQLAlchemy Core async: `schema.py` (tablas), `engine.py` (un motor por URL; aplica las migraciones de Alembic en `migrations/` la primera vez que se usa), `copy_sqlite.py` (copia una base SQLite antigua a PostgreSQL).
+- `app/services/` — lógica: `job_store` (jobs), `project_store` (proyectos, invitaciones e inputs; misma base), `mailer` (SMTP de invitaciones), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
 - `app/ssh/` — pool asyncssh singleton, creado y cerrado en `app/lifespan.py`.
 - `app/repositories/slurm.py` — consultas de estado SLURM.
-- `app/core/config.py` — `Settings` (pydantic-settings, lee `.env`); `get_settings()` está cacheado.
+- `app/core/config.py` — `Settings` (pydantic-settings, lee `.env`); `get_settings()` está cacheado. La base es `DATABASE_URL` (PostgreSQL en producción) o, si falta, SQLite en `JOBS_DB_PATH`.
+- Despliegue: `deployment.yaml` (app) y `postgres.yaml` (PostgreSQL con respaldo diario); pasos en [docs/despliegue.md](docs/despliegue.md).
 - `app/front/` — SPA Vite servida por FastAPI en `/front`.
 
 ### Flujo de un job
@@ -56,7 +60,8 @@ El contrato con el cluster está en el README de [scripts_wf](https://github.com
 - Mensajes de error, docstrings y comentarios en español.
 - Todo valor interpolado en un comando remoto pasa por `shlex.quote`.
 - Nunca loguear tokens: usar `redact_token`.
-- Los tests sobrescriben `get_settings` (ver `tests/conftest.py`) y no abren conexiones SSH reales.
+- Los tests sobrescriben `get_settings` (ver `tests/conftest.py`) y no abren conexiones SSH reales. Usan el fixture `database` (nunca `data/jobs.db`) y `run_sql` en vez de `sqlite3`, para que corran también contra PostgreSQL.
+- Cambios de esquema solo con migraciones de Alembic; no crear tablas ni columnas desde los stores.
 - Endpoints nuevos bajo `/app/...`, protegidos con `Depends(require_user)` salvo el callback del cluster.
 
 ## Commits

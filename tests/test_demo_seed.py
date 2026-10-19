@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 
 from app.services.demo_seed import (
     DEMO_CAUSES,
@@ -11,8 +10,8 @@ from app.services.demo_seed import (
 from app.services.project_store import ProjectStore
 
 
-def test_seed_creates_demo_projects_once(tmp_path: Path) -> None:
-    store = ProjectStore(str(tmp_path / "jobs.db"))
+def test_seed_creates_demo_projects_once(database: str) -> None:
+    store = ProjectStore(database)
 
     created = asyncio.run(seed_demo(store, owner="admin"))
     assert created == [DEMO_EXPERT_PROJECT, DEMO_SIMULATION_PROJECT]
@@ -33,7 +32,7 @@ def test_seed_creates_demo_projects_once(tmp_path: Path) -> None:
     assert invitation.email == DEMO_EXPERT_EMAIL and invitation.state() == "usada"
 
 
-def test_seed_only_adds_missing(tmp_path: Path) -> None:
-    store = ProjectStore(str(tmp_path / "jobs.db"))
+def test_seed_only_adds_missing(database: str) -> None:
+    store = ProjectStore(database)
     asyncio.run(store.create_project(nombre=DEMO_SIMULATION_PROJECT, descripcion="", tipo="simulacion", owner=None))
     assert asyncio.run(seed_demo(store)) == [DEMO_EXPERT_PROJECT]

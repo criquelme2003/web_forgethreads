@@ -12,6 +12,10 @@ dependencies = [
     "asyncio>=4.0.0",
     "asyncssh>=2.24.0",
     "numpy>=2.5.3",
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
+    "asyncpg>=0.30",
+    "aiosqlite>=0.20",
 ]
 
 [dependency-groups]
