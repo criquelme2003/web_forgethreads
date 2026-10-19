@@ -1,11 +1,31 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: web-forgethreads-data
+  namespace: criquelme
+spec:
+  # CephFS: el volumen sobrevive a reinicios y reprogramaciones del pod en otro nodo.
+  storageClassName: csi-cephfs-sc
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: web-forgethreads
+  namespace: criquelme
   labels:
     app: wf-deploy
 spec:
+  # SQLite admite un solo escritor: una réplica y Recreate, para que el pod viejo
+  # suelte la base antes de que arranque el nuevo.
   replicas: 1
+  strategy:
+    type: Recreate
 
   selector:
     matchLabels:
@@ -26,6 +46,15 @@ spec:
         envFrom:
           - secretRef:
               name: wfsecrets
+        # Rutas absolutas dentro del volumen; `env` tiene prioridad sobre `envFrom`.
+        env:
+          - name: JOBS_DB_PATH
+            value: /code/data/jobs.db
+          - name: FE_RESULTS_DIR
+            value: /code/data/fe_results
+        volumeMounts:
+          - name: data
+            mountPath: /code/data
         resources:
           requests:
             cpu: "100m"
@@ -45,6 +74,10 @@ spec:
             port: 80
           initialDelaySeconds: 15
           periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: web-forgethreads-data
 
 ---
 apiVersion: v1
