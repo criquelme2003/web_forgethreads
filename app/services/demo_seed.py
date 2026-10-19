@@ -85,7 +85,7 @@ def main() -> None:
     from app.core.config import get_settings
 
     settings = get_settings()
-    created = asyncio.run(seed_demo(ProjectStore(settings.jobs_db_path), settings.auth_username))
+    created = asyncio.run(seed_demo(ProjectStore(settings.effective_database_url), settings.auth_username))
     print(f"Creados: {', '.join(created)}" if created else "Los proyectos de muestra ya existían.")
 
 

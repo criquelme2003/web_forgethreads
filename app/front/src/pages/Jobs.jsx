@@ -21,7 +21,7 @@ export default function Jobs() {
   const [jobs, setJobs] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [auto, setAuto] = useState(true);
-  const [dbPath, setDbPath] = useState('data/jobs.db');
+  const [dbPath, setDbPath] = useState('');
   const autoRef = useRef(true);
   autoRef.current = auto;
 
@@ -39,7 +39,7 @@ export default function Jobs() {
   useEffect(() => {
     apiJson('/app/ui-meta')
       .then((m) => {
-        if (m.jobs_db_path) setDbPath(m.jobs_db_path);
+        if (m.database) setDbPath(m.database);
       })
       .catch(() => {});
   }, []);
@@ -57,7 +57,7 @@ export default function Jobs() {
   return (
     <div className="card">
       <h1>Trabajos encolados</h1>
-      <p className="sub">Persistidos en <span className="mono">sqlite {dbPath}</span> via <span className="mono">JobStore</span> `app/services/job_store.py` · polling cada 2s a <span className="mono">GET /app/jobs</span>.</p>
+      <p className="sub">Persistidos en <span className="mono">{dbPath}</span> via <span className="mono">JobStore</span> `app/services/job_store.py` · polling cada 2s a <span className="mono">GET /app/jobs</span>.</p>
       <div className="controls">
         <select id="filter-status" value={filter} onChange={(e) => setFilter(e.target.value)}>
           <option value="pending">Pendientes</option>

@@ -2,7 +2,6 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -160,12 +159,12 @@ class FakeSelector:
 
 
 @pytest.fixture
-def ctx(tmp_path: Path):
+def ctx(database: str):
     settings = Settings(
         auth_username="u", auth_password="p", session_secret_key="s" * 20,
         public_callback_base_url="http://testserver", submit_check_delay_s=0,
     )
-    store = JobStore(str(tmp_path / "jobs.db"))
+    store = JobStore(database)
     selector = FakeSelector([_status("cuda1"), _status("cuda2"), _status("cuda3", NodeState.DRAIN)])
     return settings, store, selector
 

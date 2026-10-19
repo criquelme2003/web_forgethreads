@@ -11,7 +11,7 @@ from app.api.deps import get_job_store, get_node_selector, get_ssh_pool
 from app.core.config import Settings, get_settings
 from app.main import app
 from app.services.job_store import JobStore
-from tests.conftest import TEST_PASSWORD, TEST_USERNAME
+from tests.conftest import TEST_PASSWORD, TEST_USERNAME, sqlite_only
 from tests.test_fe_input import CC, CE, EE
 
 JOB_ID = "4242"
@@ -51,9 +51,9 @@ class FakeSelector:
 
 
 @pytest.fixture
-def env(tmp_path: Path, monkeypatch):
+def env(tmp_path: Path, database: str, monkeypatch):
     pool = FakePool()
-    store = JobStore(str(tmp_path / "jobs.db"))
+    store = JobStore(database)
     uploads: dict = {}
     downloads: list = []
     paths_csv = (
@@ -210,13 +210,10 @@ def test_partial_status_is_accepted(env) -> None:
 
 
 def _token(store: JobStore) -> str:
-    conn = sqlite3.connect(store._resolve_db_path())
-    try:
-        return conn.execute("SELECT token FROM jobs WHERE job_id=?", (JOB_ID,)).fetchone()[0]
-    finally:
-        conn.close()
+    return asyncio.run(store.get(JOB_ID)).token
 
 
+@sqlite_only
 def test_old_jobs_table_is_migrated(tmp_path: Path) -> None:
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
