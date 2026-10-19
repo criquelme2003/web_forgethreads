@@ -4,6 +4,7 @@ metadata:
   name: web-forgethreads-data
   namespace: criquelme
 spec:
+  # Resultados descargados del cluster (CSV de caminos). La base de datos está en postgres.yaml.
   # CephFS: el volumen sobrevive a reinicios y reprogramaciones del pod en otro nodo.
   storageClassName: csi-cephfs-sc
   accessModes:
@@ -21,8 +22,8 @@ metadata:
   labels:
     app: wf-deploy
 spec:
-  # SQLite admite un solo escritor: una réplica y Recreate, para que el pod viejo
-  # suelte la base antes de que arranque el nuevo.
+  # Recreate: el volumen de resultados es ReadWriteOnce, así que el pod viejo debe soltarlo
+  # antes de que arranque el nuevo.
   replicas: 1
   strategy:
     type: Recreate
@@ -46,10 +47,18 @@ spec:
         envFrom:
           - secretRef:
               name: wfsecrets
-        # Rutas absolutas dentro del volumen; `env` tiene prioridad sobre `envFrom`.
+        # `env` tiene prioridad sobre `envFrom`.
         env:
-          - name: JOBS_DB_PATH
-            value: /code/data/jobs.db
+          # Base PostgreSQL (postgres.yaml). La contraseña sale del secret wf-postgres y se
+          # interpola con $(...): es hexadecimal, así que no hay que escaparla en la URL.
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: wf-postgres
+                key: POSTGRES_PASSWORD
+          - name: DATABASE_URL
+            value: postgresql://wf:$(POSTGRES_PASSWORD)@wf-postgres:5432/wf
+          # El volumen guarda los resultados descargados del cluster (CSV de caminos).
           - name: FE_RESULTS_DIR
             value: /code/data/fe_results
         volumeMounts:

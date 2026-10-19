@@ -105,7 +105,7 @@ La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálc
 
 | ID | Requerimiento |
 |---|---|
-| RNF-01 | La base pasa a SQLAlchemy con migraciones (Alembic), manteniendo SQLite. |
+| RNF-01 | La base pasa a SQLAlchemy con migraciones (Alembic). En producción se usa PostgreSQL (`postgres.yaml`, con respaldo diario); SQLite queda para desarrollo local y tests. |
 | RNF-02 | El barrido corre en un solo job, así que el límite es la duración: el backend estima el tiempo, rechaza barridos que superen un máximo configurable y pide el `--time` de SLURM según la estimación. |
 | RNF-03 | Los resultados grandes (caminos, CSV del barrido) se descargan por SFTP con el pool SSH existente; el callback solo informa estado y resumen. |
 | RNF-04 | Tests de autorización por rol y por dueño para cada endpoint nuevo. |
