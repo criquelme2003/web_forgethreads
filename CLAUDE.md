@@ -17,7 +17,7 @@ uv run uvicorn app.main:app --reload            # servidor local
 ## Arquitectura
 
 - `app/api/` — routers FastAPI. Dependencias compartidas en `api/deps.py` (`require_user`, `get_job_store`, `get_ssh_pool`, `get_node_selector`); usarlas siempre en vez de instanciar servicios en el router.
-- `app/services/` — lógica: `job_store` (SQLite), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
+- `app/services/` — lógica: `job_store` (SQLite), `project_store` (proyectos, invitaciones e inputs; misma base), `mailer` (SMTP de invitaciones), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
 - `app/ssh/` — pool asyncssh singleton, creado y cerrado en `app/lifespan.py`.
 - `app/repositories/slurm.py` — consultas de estado SLURM.
 - `app/core/config.py` — `Settings` (pydantic-settings, lee `.env`); `get_settings()` está cacheado.
@@ -25,10 +25,11 @@ uv run uvicorn app.main:app --reload            # servidor local
 
 ### Flujo de un job
 
-1. `POST /app/execute_maxmin` valida, resuelve nodo y corre `sbatch new_job.sh` por SSH → parsea JOBID.
+1. `POST /app/execute_maxmin` valida y llama a `submit_with_failover` (`app/api/launch.py`): consulta los nodos sin caché (`NodeSelector.ranked_candidates`; los flags `+DRAIN`, `+NOT_RESPONDING`, `*`, etc. dejan el nodo no disponible), corre `sbatch new_job.sh`, parsea el JOBID y revisa con `squeue` que no quedó bloqueado (`ReqNodeNotAvail`…). Si falla o quedó bloqueado, lo cancela y prueba el siguiente nodo (RF-46). Con `nodo` explícito no hay failover.
 2. `JobStore.create` genera un token por job.
 3. Se encadena `sbatch --dependency=afterany:<id> notifier.sh` con ese token (corre aunque el job falle).
 4. `notifier.sh` llama a `POST /app/job_callback` con `Authorization: Bearer <token>` → se actualiza el registro.
+5. `GET /app/maxmin/jobs/{id}` devuelve el job y los efectos por orden leídos de su log (`app/services/maxmin_log.py`); el SPA los grafica en `/front/maxmin/jobs/<id>`.
 
 ### Cálculo de caminos (forgeffects)
 
@@ -36,6 +37,17 @@ uv run uvicorn app.main:app --reload            # servidor local
 2. `POST /app/fe/execute` sube `CC.npy`, `CE.npy`, `EE.npy` y `meta.json` por SFTP a `<scripts_wf>/jobs_inputs/<request_id>/` (`app/services/fe_remote.py`) y lanza `sbatch fe_job.sh --input-dir ...` + notifier (`app/api/launch.py`).
 3. El callback guarda el resumen (`orders`, `rows_per_order`, `k`) en `jobs.result`.
 4. `GET /app/fe/jobs/{id}/paths` descarga por SFTP `jobs_results/<id>/paths_order_<o>.csv` la primera vez y los cachea en `fe_results_dir`.
+5. El SPA (`/front/fe/jobs/<id>`) los muestra como Sankey por orden, chord (dirigido, origen → destino sin intermedios, color por orden) o hive plot (ejes Origen, Intermedios y Destino, color por orden) (`components/Paths*.jsx`, modelo común en `pathsModel.js`); el filtro de origen es compartido y se cambia con un clic en un nodo de origen.
+
+### Proyectos
+
+- Tipos `expertos` (estados `borrador → abierto → cerrado`, reabrible) y `simulacion` (`abierto ↔ cerrado`). Las etiquetas solo se editan en `borrador`. El proyecto no tiene `thr` ni `maxorder`: se indican en cada lanzamiento.
+- Los cálculos de un proyecto son filas de `jobs` con `project_id` (e `input_id` si vienen de un experto). `POST /app/execute_maxmin` exige `project_id` de un proyecto de simulación abierto.
+- Invitaciones: token de un solo uso, solo se guarda su hash; el enlace (`/front/invite/<token>`) se muestra al crear o regenerar. Con `INVITATION_DELIVERY=smtp` además se envía por correo (puerto 465 = SSL implícito).
+- `/app/invite/{token}` es público (sin sesión): info, validación contra las etiquetas del proyecto y envío. El envío consume el token en la misma transacción que guarda el input (matrices normalizadas en `expert_inputs`); no lanza nada en el cluster.
+- `POST /app/projects/{id}/compute` (`thr`, `maxorder`, `nodo?`, `input_ids?`; por defecto los no excluidos) lanza un `fe_job.sh` por input. Los errores de lanzamiento se devuelven por input; reintentar es volver a lanzar.
+- Al abrir la base, los jobs MaxMin sin proyecto se mueven a un proyecto de simulación «MaxMin (jobs anteriores)».
+- Datos de muestra (`app/services/demo_seed.py`): «Demo · Expertos» (abierto, con un input de `docs/ejemplos_fe`) y «Demo · Simulación» (vacío). Se crean si faltan con `SEED_DEMO_DATA=true` al iniciar o con `uv run python -m app.services.demo_seed`.
 
 El contrato con el cluster está en el README de [scripts_wf](https://github.com/criquelme2003/scripts_wf).
 

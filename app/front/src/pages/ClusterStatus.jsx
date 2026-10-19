@@ -57,7 +57,7 @@ export default function ClusterStatus() {
             <thead>
               <tr>
                 <th>Nodo</th><th>Host</th><th>Estado</th><th>GPUs libres</th><th>CPUs libres</th>
-                <th>Jobs pend.</th><th>Score</th><th>Reachable</th>
+                <th>Jobs pend.</th><th>Score</th><th>Reachable</th><th>Motivo</th>
                 {checkIdle && <><th>GPU idle?</th><th>GPU utils</th></>}
               </tr>
             </thead>
@@ -72,6 +72,7 @@ export default function ClusterStatus() {
                   <td>{row.pending_jobs}</td>
                   <td className="mono">{row.score.toFixed(1)}</td>
                   <td>{row.reachable ? <span className="badge yes">sí</span> : <span className="badge no">no</span>}</td>
+                  <td className="mono-sm small">{row.reason || '—'}</td>
                   {checkIdle && <><td>{row.idle_str}</td><td className="mono">{row.utils_str}</td></>}
                 </tr>
               ))}

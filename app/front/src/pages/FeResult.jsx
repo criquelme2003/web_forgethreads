@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiFetch } from '../api.js';
+import PathsChord from '../components/PathsChord.jsx';
+import PathsHive from '../components/PathsHive.jsx';
 import PathsSankey from '../components/PathsSankey.jsx';
+import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
+import { orderBucket, orderColor, selectPaths, tablesToPaths } from '../components/pathsModel.js';
 
 const POLL_MS = 3000;
 const PAGE_SIZE = 200;
@@ -12,13 +16,29 @@ function fmtNumber(v) {
 
 const TOP_OPTIONS = [25, 50, 100, 200];
 
-function OrderView({ jobId, table, causes }) {
-  const [origin, setOrigin] = useState('');
+const VIEWS = [
+  { key: 'sankey', label: 'Sankey por orden' },
+  { key: 'chord', label: 'Chord' },
+  { key: 'hive', label: 'Hive plot' },
+];
+
+function OriginSelect({ origins, origin, onOriginChange }) {
+  const options = origin && !origins.includes(origin) ? [origin, ...origins] : origins;
+  return (
+    <select value={origin} onChange={(e) => onOriginChange(e.target.value)} aria-label="Origen">
+      <option value="">Todos los orígenes</option>
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+}
+
+function OrderView({ jobId, table, causes, origin, onOriginChange }) {
   const [top, setTop] = useState(50);
   const metrics = ['Mean', 'Count'].filter((m) => table.columns.includes(m));
   const [metric, setMetric] = useState(metrics[0] || 'Mean');
   const [limit, setLimit] = useState(PAGE_SIZE);
   const origins = useMemo(() => [...new Set(table.rows.map((r) => r[0]))].sort(), [table]);
+  useEffect(() => setLimit(PAGE_SIZE), [origin]);
   const metricIdx = table.columns.indexOf(metric);
   const meanIdx = table.columns.indexOf('Mean');
   // Filtros compartidos: el Sankey y la tabla muestran siempre el mismo subconjunto.
@@ -31,10 +51,7 @@ function OrderView({ jobId, table, causes }) {
   return (
     <div>
       <div className="controls">
-        <select value={origin} onChange={(e) => { setOrigin(e.target.value); setLimit(PAGE_SIZE); }} aria-label="Origen">
-          <option value="">Todos los orígenes</option>
-          {origins.map((o) => <option key={o} value={o}>{o}</option>)}
-        </select>
+        <OriginSelect origins={origins} origin={origin} onOriginChange={onOriginChange} />
         <select value={top} onChange={(e) => setTop(Number(e.target.value))} aria-label="Caminos en el Sankey">
           {TOP_OPTIONS.map((n) => <option key={n} value={n}>Sankey: top {n}</option>)}
           <option value={0}>Sankey: todos</option>
@@ -49,7 +66,16 @@ function OrderView({ jobId, table, causes }) {
         </span>
         <a className="btn" href={`/app/fe/jobs/${jobId}/paths_order_${table.order}.csv`}>Descargar CSV</a>
       </div>
-      <PathsSankey columns={table.columns} rows={sankeyRows} metric={metric} causes={causes} />
+      <VizErrorBoundary resetKey={`${origin}|${top}|${metric}`}>
+        <PathsSankey
+          columns={table.columns}
+          rows={sankeyRows}
+          metric={metric}
+          causes={causes}
+          origin={origin}
+          onOriginChange={onOriginChange}
+        />
+      </VizErrorBoundary>
       <div style={{ overflow: 'auto', marginTop: 16 }}>
         <table>
           <thead>
@@ -71,6 +97,99 @@ function OrderView({ jobId, table, causes }) {
   );
 }
 
+/** Chord / hive plot con todos los órdenes juntos, coloreados por orden. */
+function MultiOrderView({ view, tables, causes, effects, origin, onOriginChange }) {
+  const metrics = ['Mean', 'Count'].filter((m) => tables[0]?.columns.includes(m));
+  const [metric, setMetric] = useState(metrics[0] || 'Mean');
+  const [top, setTop] = useState(50);
+  const allOrders = useMemo(() => tables.map((t) => t.order), [tables]);
+  const [hidden, setHidden] = useState(() => new Set()); // órdenes ocultos
+  const paths = useMemo(() => tablesToPaths(tables, metric), [tables, metric]);
+  const origins = useMemo(() => [...new Set(paths.map((p) => p.from))].sort(), [paths]);
+  const visibleOrders = useMemo(() => new Set(allOrders.filter((o) => !hidden.has(o))), [allOrders, hidden]);
+  const shown = useMemo(
+    () => selectPaths(paths, { origin, orders: visibleOrders, top }),
+    [paths, origin, visibleOrders, top],
+  );
+  const total = useMemo(() => paths.filter((p) => !origin || p.from === origin).length, [paths, origin]);
+  // Leyenda: un ítem por orden (desde el 6 comparten color y se agrupan como "6+").
+  const legend = useMemo(() => {
+    const items = new Map();
+    for (const o of allOrders) {
+      const key = orderBucket(o, allOrders);
+      if (!items.has(key)) items.set(key, { key, color: orderColor(o, allOrders), orders: [] });
+      items.get(key).orders.push(o);
+    }
+    return [...items.values()];
+  }, [allOrders]);
+
+  function toggle(item) {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      const allHidden = item.orders.every((o) => next.has(o));
+      item.orders.forEach((o) => (allHidden ? next.delete(o) : next.add(o)));
+      return next;
+    });
+  }
+
+  const Chart = view === 'chord' ? PathsChord : PathsHive;
+  return (
+    <div>
+      <div className="controls">
+        <OriginSelect origins={origins} origin={origin} onOriginChange={onOriginChange} />
+        <select value={top} onChange={(e) => setTop(Number(e.target.value))} aria-label="Caminos por orden">
+          {TOP_OPTIONS.map((n) => <option key={n} value={n}>Top {n} por orden</option>)}
+          <option value={0}>Todos los caminos</option>
+        </select>
+        {metrics.length > 1 && (
+          <select value={metric} onChange={(e) => setMetric(e.target.value)} aria-label="Métrica">
+            {metrics.map((m) => <option key={m} value={m}>{view === 'chord' ? 'Ancho' : 'Grosor'}: {m}</option>)}
+          </select>
+        )}
+        <span className="small muted">{shown.length} de {total} caminos</span>
+      </div>
+      <div className="order-legend" role="group" aria-label="Órdenes visibles">
+        <span className="small muted">Orden</span>
+        {legend.map((item) => {
+          const off = item.orders.every((o) => hidden.has(o));
+          return (
+            <button
+              key={item.key}
+              type="button"
+              className={`legend-chip${off ? ' is-off' : ''}`}
+              aria-pressed={!off}
+              onClick={() => toggle(item)}
+            >
+              <svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" rx="2" fill={item.color} /></svg>
+              {item.key}
+            </button>
+          );
+        })}
+        <span className="pv-kind-legend small muted">
+          <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#4b5563" /></svg>Causa</span>
+          <span><svg width="10" height="10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="#9ca3af" /></svg>Efecto</span>
+        </span>
+        <span className="small muted">
+          {view === 'chord'
+            ? `más oscuro = más indirecto · ancho = suma de ${metric} · la flecha apunta al destino · clic en un nodo para filtrar por ese origen`
+            : `más oscuro = más indirecto · grosor = ${metric} · clic en un origen para filtrar`}
+        </span>
+      </div>
+      <VizErrorBoundary resetKey={`${view}|${origin}|${top}|${metric}|${[...visibleOrders].join(',')}`}>
+        <Chart
+          paths={shown}
+          orders={allOrders}
+          causes={causes}
+          effects={effects}
+          metric={metric}
+          origin={origin}
+          onOriginChange={onOriginChange}
+        />
+      </VizErrorBoundary>
+    </div>
+  );
+}
+
 export default function FeResult() {
   const { jobId } = useParams();
   const [job, setJob] = useState(null);
@@ -78,6 +197,8 @@ export default function FeResult() {
   const [paths, setPaths] = useState(null);
   const [pathsError, setPathsError] = useState('');
   const [order, setOrder] = useState(null);
+  const [view, setView] = useState('sankey');
+  const [origin, setOrigin] = useState(''); // compartido entre órdenes y vistas
 
   useEffect(() => {
     let cancelled = false;
@@ -144,7 +265,9 @@ export default function FeResult() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
           <h1>Caminos · job <span className="mono">{job.job_id}</span></h1>
-          <Link to="/fe" className="small muted">nuevo cálculo →</Link>
+          {job.project_id != null
+            ? <Link to={`/projects/${job.project_id}`} className="small muted">← proyecto</Link>
+            : <Link to="/fe" className="small muted">nuevo cálculo →</Link>}
         </div>
         <div className="kv">
           <span>Estado</span><span><span className={`badge ${job.status}`}>{job.status}</span></span>
@@ -172,13 +295,35 @@ export default function FeResult() {
 
       {job.status === 'success' && (
         <div className="card">
-          <h2 style={{ marginBottom: 10 }}>Caminos por orden</h2>
+          <div className="chart-head">
+            <h2>Caminos</h2>
+            {paths && paths.tables.length > 0 && (
+              <div className="controls" role="tablist" aria-label="Visualización" style={{ marginBottom: 0 }}>
+                {VIEWS.map((v) => (
+                  <button key={v.key} type="button" role="tab" aria-selected={view === v.key} className={view === v.key ? 'primary' : undefined} onClick={() => setView(v.key)}>
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {pathsError && <p className="status err">{pathsError}</p>}
           {!paths && !pathsError && <div className="empty">Descargando resultados del nodo…</div>}
           {paths && paths.tables.length === 0 && (
             <div className="empty">No hay efectos olvidados con THR = {params.thr}.</div>
           )}
-          {paths && paths.tables.length > 0 && (
+          {paths && paths.tables.length > 0 && view !== 'sankey' && (
+            <MultiOrderView
+              key={view}
+              view={view}
+              tables={paths.tables}
+              causes={paths.causes}
+              effects={paths.effects}
+              origin={origin}
+              onOriginChange={setOrigin}
+            />
+          )}
+          {paths && paths.tables.length > 0 && view === 'sankey' && (
             <>
               <div className="controls">
                 {paths.tables.map((t) => (
@@ -187,7 +332,16 @@ export default function FeResult() {
                   </button>
                 ))}
               </div>
-              {table && <OrderView key={table.order} jobId={job.job_id} table={table} causes={paths.causes} />}
+              {table && (
+                <OrderView
+                  key={table.order}
+                  jobId={job.job_id}
+                  table={table}
+                  causes={paths.causes}
+                  origin={origin}
+                  onOriginChange={setOrigin}
+                />
+              )}
             </>
           )}
         </div>

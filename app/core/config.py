@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     ssh_keepalive_interval: int = 30
     # GPU idle detection
     gpu_idle_threshold: int = 5  # % util por debajo del cual GPU se considera idle
+    # Espera tras el sbatch antes de revisar con squeue que el job no quedó bloqueado en el nodo
+    # (ReqNodeNotAvail, etc.); si quedó bloqueado se cancela y se prueba el siguiente nodo (RF-46).
+    submit_check_delay_s: float = 2.0
+    # Crea al iniciar los proyectos de muestra que falten (ver app/services/demo_seed.py)
+    seed_demo_data: bool = False
     # Jobs notifier
     callback_base_url: str | None = None  # ej http://host:8000, si None se deduce de request.host
 
@@ -36,6 +41,22 @@ class Settings(BaseSettings):
     session_idle_timeout_seconds: int = 24 * 60 * 60  # inactividad máxima antes de expirar la sesión (sliding window)
     jobs_db_path: str = "data/jobs.db"  # sqlite para persistencia de cola
     fe_results_dir: str = "data/fe_results"  # caché local de los CSV de caminos descargados de fe_job
+
+    # --- Invitaciones a expertos ---
+    invitation_ttl_days: int = 14  # vigencia del enlace de invitación (RF-10)
+    # "manual": el admin copia el enlace y lo envía; "smtp": además se envía por correo (RF-12)
+    invitation_delivery: str = "manual"
+    smtp_host: str | None = None
+    smtp_port: int = 465  # 465 = SSL implícito (SMTPS); con smtp_use_ssl=False se usa STARTTLS
+    smtp_use_ssl: bool = True
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None  # remitente; si falta se usa smtp_username
+    smtp_timeout: int = 15
+
+    @property
+    def smtp_enabled(self) -> bool:
+        return self.invitation_delivery.lower() == "smtp" and bool(self.smtp_host)
 
     @property
     def session_cookie_secure(self) -> bool:

@@ -6,12 +6,17 @@ from fastapi import HTTPException, Request, status
 from app.core.config import get_settings
 from app.services.job_store import job_store
 from app.services.node_selector import NodeSelector
+from app.services.project_store import project_store
 from app.ssh.pool import SSHConnectionPool
 
 logger = logging.getLogger("ssh_pool")
 
 def get_job_store():
   return job_store
+
+
+def get_project_store():
+    return project_store
 
 
 def require_user(request: Request) -> str:

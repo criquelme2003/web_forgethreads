@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.api import execute_maxmin, fe, login, parameters, gpu_status, job_callback, meta
+from app.api import execute_maxmin, fe, invite, login, parameters, gpu_status, job_callback, meta, projects
 from app.core.config import get_settings
 from app.lifespan import global_lifespan
 import logging;
@@ -30,6 +30,8 @@ app.include_router(execute_maxmin.router)
 app.include_router(job_callback.router)
 app.include_router(meta.router)
 app.include_router(fe.router)
+app.include_router(projects.router)
+app.include_router(invite.router)
 
 # --- Frontend SPA (build de Vite en app/front/dist, ver app/front/package.json) ---
 FRONT_DIST = Path(__file__).resolve().parent / "front" / "dist"

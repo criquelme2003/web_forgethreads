@@ -25,6 +25,7 @@ class ClusterRow(BaseModel):
     pending_jobs: int
     score: float
     reachable: bool
+    reason: str | None = None  # Reason= de `scontrol show node`, tal cual lo reporta SLURM
     idle_str: str | None = None
     utils_str: str | None = None
 
@@ -122,6 +123,7 @@ async def cluster_status(
             pending_jobs=s.pending_jobs,
             score=selector.score(s),
             reachable=s.reachable,
+            reason=s.reason,
         )
         if check_idle:
             row.idle_str = "sí" if s.has_idle_gpu else ("no" if s.has_idle_gpu is not None else "—")

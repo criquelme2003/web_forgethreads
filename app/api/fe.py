@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Annotated
 
 import asyncssh
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_job_store, get_node_selector, get_ssh_pool, require_user
-from app.api.launch import launch_with_notifier, resolve_node
+from app.api.launch import submit_with_failover
 from app.core.config import Settings, get_settings
 from app.services.fe_input import FeInput, load_fe_input
 from app.services.fe_remote import build_fe_input_files, download_fe_results, upload_fe_input
@@ -105,6 +106,61 @@ def _validation_response(data: FeInput) -> FeValidationResponse:
     )
 
 
+async def launch_fe_job(
+    *,
+    pool: SSHConnectionPool,
+    store: JobStore,
+    selector: NodeSelector,
+    settings: Settings,
+    nodo: str | None,
+    cc: np.ndarray,
+    ce: np.ndarray,
+    ee: np.ndarray,
+    causes: list[str],
+    effects: list[str],
+    thr: float,
+    maxorder: int,
+    project_id: int | None = None,
+    input_id: int | None = None,
+) -> tuple[str, str]:
+    """Sube las matrices al nodo por SFTP y lanza fe_job.sh + notifier. Devuelve (JOBID, nodo).
+
+    Si `nodo` es None se elige automáticamente, con failover: si la subida o el sbatch fallan
+    en un nodo, se vuelve a subir el input al siguiente (RF-46).
+    """
+    request_id = uuid.uuid4().hex
+    meta = {
+        "causes": causes,
+        "effects": effects,
+        "thr": thr,
+        "maxorder": maxorder,
+        "reps": SINGLE_EXPERT_REPS,
+    }
+    files = build_fe_input_files(cc, ce, ee, meta)
+
+    async def prepare(node: str) -> str:
+        try:
+            input_dir = await upload_fe_input(pool, node, settings.scripts_wf_dir, request_id, files)
+        except (asyncssh.Error, OSError) as e:
+            logger.warning("No se pudo subir el input de fe_job a %s: %s", node, e)
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"No se pudo subir el input al nodo {node}")
+        return build_fe_job_command(settings.scripts_wf_dir, input_dir)
+
+    return await submit_with_failover(
+        nodo=nodo,
+        pool=pool,
+        selector=selector,
+        store=store,
+        settings=settings,
+        prepare=prepare,
+        script="fe_job.sh",
+        kind="fe",
+        params={**meta, "request_id": request_id},
+        project_id=project_id,
+        input_id=input_id,
+    )
+
+
 @router.post("/app/fe/validate", response_model=FeValidationResponse)
 async def validate_fe_input(
     body: FeMatricesRequest,
@@ -131,31 +187,19 @@ async def execute_fe(
             detail=_validation_response(data).model_dump(),
         )
 
-    node = await resolve_node(body.nodo, pool, selector)
-    request_id = uuid.uuid4().hex
-    meta = {
-        "causes": data.causes,
-        "effects": data.effects,
-        "thr": body.thr,
-        "maxorder": body.maxorder,
-        "reps": SINGLE_EXPERT_REPS,
-    }
-    files = build_fe_input_files(data.cc, data.ce, data.ee, meta)
-    try:
-        input_dir = await upload_fe_input(pool, node, settings.scripts_wf_dir, request_id, files)
-    except (asyncssh.Error, OSError) as e:
-        logger.warning("No se pudo subir el input de fe_job a %s: %s", node, e)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"No se pudo subir el input al nodo {node}")
-
-    job_id = await launch_with_notifier(
+    job_id, node = await launch_fe_job(
         pool=pool,
         store=store,
+        selector=selector,
         settings=settings,
-        node=node,
-        command=build_fe_job_command(settings.scripts_wf_dir, input_dir),
-        script="fe_job.sh",
-        kind="fe",
-        params={**meta, "request_id": request_id},
+        nodo=body.nodo,
+        cc=data.cc,
+        ce=data.ce,
+        ee=data.ee,
+        causes=data.causes,
+        effects=data.effects,
+        thr=body.thr,
+        maxorder=body.maxorder,
     )
     return FeExecuteResponse(job_id=job_id, node=node, warnings=data.warnings)
 

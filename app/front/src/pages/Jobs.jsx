@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch, apiJson } from '../api.js';
 
 function fmt(iso) {
@@ -21,7 +21,6 @@ export default function Jobs() {
   const [jobs, setJobs] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [auto, setAuto] = useState(true);
-  const [detail, setDetail] = useState(null);
   const [dbPath, setDbPath] = useState('data/jobs.db');
   const autoRef = useRef(true);
   autoRef.current = auto;
@@ -53,14 +52,6 @@ export default function Jobs() {
     return () => clearInterval(iv);
   }, [filter, fetchJobs]);
 
-  async function showDetail(id) {
-    try {
-      const d = await apiJson(`/app/jobs/${id}`);
-      setDetail({ id, json: JSON.stringify(d, null, 2) });
-      document.getElementById('detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    } catch {}
-  }
-
   const emptyLabel = filter ? `(${filter})` : '';
 
   return (
@@ -84,19 +75,22 @@ export default function Jobs() {
       <div style={{ overflow: 'auto' }}>
         <table>
           <thead>
-            <tr><th>Job ID</th><th>Tipo</th><th>Estado</th><th>Nodo</th><th>Creado</th><th>Orden</th><th>Tiempo(s)</th></tr>
+            <tr><th>Job ID</th><th>Tipo</th><th>Proyecto</th><th>Estado</th><th>Nodo</th><th>Creado</th><th>Orden</th><th>Tiempo(s)</th></tr>
           </thead>
           <tbody id="tbody">
             {jobs === null && (
-              <tr><td colSpan="7" className="empty">Cargando…</td></tr>
+              <tr><td colSpan="8" className="empty">Cargando…</td></tr>
             )}
             {jobs !== null && jobs.length === 0 && (
-              <tr><td colSpan="7" className="empty">Sin trabajos {emptyLabel}</td></tr>
+              <tr><td colSpan="8" className="empty">Sin trabajos {emptyLabel}</td></tr>
             )}
             {jobs !== null && jobs.map((j) => (
-              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => (j.kind === 'fe' ? navigate(`/fe/jobs/${j.job_id}`) : showDetail(j.job_id))}>
+              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => navigate(j.kind === 'fe' ? `/fe/jobs/${j.job_id}` : `/maxmin/jobs/${j.job_id}`)}>
                 <td className="mono">{j.job_id}</td>
                 <td>{KIND_LABELS[j.kind] || j.kind}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  {j.project_id != null ? <Link to={`/projects/${j.project_id}`}>#{j.project_id}</Link> : '—'}
+                </td>
                 <td><span className={`badge ${badgeClass(j.status)}`}>{j.status}</span></td>
                 <td>{j.node}</td>
                 <td className="small">{fmt(j.created_at)}</td>
@@ -107,15 +101,6 @@ export default function Jobs() {
           </tbody>
         </table>
       </div>
-      {detail && (
-        <div id="detail" style={{ marginTop: 16, border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: '#f9fafb' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: '#374151', marginBottom: 8 }}>
-            Detalle <span className="mono">{detail.id}</span>
-          </div>
-          <pre className="mono" style={{ background: '#fff', border: '1px solid var(--border)', padding: 10, borderRadius: 6, overflow: 'auto', fontSize: 12, margin: 0, whiteSpace: 'pre-wrap' }}>{detail.json}</pre>
-        </div>
-      )}
-      {!detail && <div id="detail" hidden />}
     </div>
   );
 }

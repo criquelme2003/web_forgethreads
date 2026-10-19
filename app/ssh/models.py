@@ -12,9 +12,14 @@ class NodeState(str, Enum):
 
     @classmethod
     def from_slurm(cls, raw: str) -> "NodeState":
-        """Normaliza estados SLURM (mayúsculas, con sufijos *, #, etc)."""
-        cleaned = raw.strip().lower().split()[0]  # "idle", "mix*", "drain"
-        cleaned = cleaned.rstrip("*#~$!")  # sufijos SLURM
+        """Normaliza estados SLURM (mayúsculas, con sufijos *, #, etc).
+
+        El sufijo `*` (sinfo) indica que el nodo no responde: se trata como DOWN.
+        """
+        token = raw.strip().lower().split()[0]  # "idle", "mix*", "drain"
+        if token.endswith("*"):
+            return cls.DOWN
+        cleaned = token.rstrip("*#~$!-@^%")  # sufijos SLURM
         for state in cls:
             if cleaned == state.value:
                 return state
@@ -23,7 +28,8 @@ class NodeState(str, Enum):
             return cls.MIX
         if cleaned in ("allocated", "alloc"):
             return cls.ALLOC
-        if cleaned in ("draining", "drain"):
+        if cleaned in ("draining", "drain", "drained", "maint", "reserved"):
+            # Mantención o reserva: no acepta jobs comunes, igual que un nodo drenado.
             return cls.DRAIN
         if cleaned in ("down", "fail", "error"):
             return cls.DOWN
@@ -54,6 +60,8 @@ class NodeStatus:
     pending_jobs: int = 0
     reachable: bool = True
     raw_scontrol: str | None = None
+    state_flags: tuple[str, ...] = ()  # flags de State en scontrol (ej. ("DRAIN",) de IDLE+DRAIN)
+    reason: str | None = None  # Reason= de scontrol (motivo del drain/down)
     # --- GPU idle (opcional, se rellena bajo demanda) ---
     has_idle_gpu: bool | None = None  # None = no consultado, True/False = resultado
     gpu_utils: list[int] | None = None  # util % por GPU si se consultó (ej [0, 45])
