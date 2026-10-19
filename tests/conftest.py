@@ -1,5 +1,11 @@
 import asyncio
 import os
+import tempfile
+
+# El lifespan de la app usa la configuración real (no los overrides de los tests): se apunta a
+# una base temporal antes de que se lea, para no tocar data/jobs.db.
+os.environ["JOBS_DB_PATH"] = os.path.join(tempfile.mkdtemp(prefix="wf-tests-"), "jobs.db")
+os.environ.pop("DATABASE_URL", None)
 
 import pytest
 from fastapi.testclient import TestClient
