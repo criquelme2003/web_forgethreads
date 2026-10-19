@@ -266,6 +266,18 @@ export default function FeResult() {
         </div>
         <div className="kv">
           <span>Estado</span><span><span className={`badge ${job.status}`}>{job.status}</span></span>
+          {job.experto && (
+            <>
+              <span>Experto</span>
+              <span>
+                {job.experto.nombre ? `${job.experto.nombre} (${job.experto.email})` : job.experto.email}
+                <span className="small muted"> · input v{job.experto.input_version}</span>
+                {job.experto.input_version < job.experto.version_vigente && (
+                  <>{' '}<span className="badge outdated" title={`El experto modificó su input (versión vigente: ${job.experto.version_vigente})`}>input modificado</span></>
+                )}
+              </span>
+            </>
+          )}
           <span>Nodo</span><span>{job.node}</span>
           <span>THR</span><span>{params.thr ?? '—'}</span>
           <span>Orden máximo</span><span>{params.maxorder ?? '—'}</span>

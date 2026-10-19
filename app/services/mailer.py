@@ -1,4 +1,4 @@
-"""Envío por SMTP de las invitaciones a expertos (RF-12, modo `smtp`)."""
+"""Envío por SMTP de las invitaciones a expertos y de los enlaces de activación de admins (RF-12, RF-48)."""
 
 import asyncio
 import smtplib
@@ -12,21 +12,55 @@ class MailError(Exception):
     pass
 
 
-def build_invitation_message(
-    settings: Settings, to: str, project_name: str, link: str, expires: str
-) -> EmailMessage:
+def _message(settings: Settings, to: str, subject: str, body: str) -> EmailMessage:
     msg = EmailMessage()
-    msg["Subject"] = f"Invitación a responder: {project_name}"
+    msg["Subject"] = subject
     msg["From"] = settings.smtp_from or settings.smtp_username or ""
     msg["To"] = to
-    msg.set_content(
-        "Hola:\n\n"
+    msg.set_content(body)
+    return msg
+
+
+def build_invitation_message(
+    settings: Settings,
+    to: str,
+    project_name: str,
+    link: str,
+    expires: str,
+    nombre: str | None = None,
+    edit_days: int = 0,
+) -> EmailMessage:
+    edit = (
+        f"Después de enviarlas, con el mismo enlace puedes modificarlas durante {edit_days} días.\n"
+        if edit_days
+        else ""
+    )
+    return _message(
+        settings,
+        to,
+        f"Invitación a responder: {project_name}",
+        f"Hola{' ' + nombre if nombre else ''}:\n\n"
         f"Te invitamos a ingresar tu evaluación para el proyecto «{project_name}».\n\n"
         "Abre el siguiente enlace para subir las matrices CC, CE y EE:\n\n"
         f"{link}\n\n"
-        f"El enlace es personal, sirve para un solo envío y vence el {expires}.\n"
+        f"El enlace es personal y vence el {expires} si no respondes.\n"
+        f"{edit}",
     )
-    return msg
+
+
+def build_activation_message(
+    settings: Settings, to: str, nombre: str, link: str, expires: str
+) -> EmailMessage:
+    """Enlace para que un admin nuevo elija su contraseña, o para restablecerla (RF-48)."""
+    return _message(
+        settings,
+        to,
+        "Acceso de administrador a forgethreads",
+        f"Hola{' ' + nombre if nombre else ''}:\n\n"
+        "Tienes una cuenta de administrador en forgethreads. Para elegir tu contraseña, abre:\n\n"
+        f"{link}\n\n"
+        f"El enlace es personal, sirve una sola vez y vence el {expires}.\n",
+    )
 
 
 def _send_sync(settings: Settings, msg: EmailMessage) -> None:

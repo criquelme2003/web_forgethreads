@@ -116,11 +116,14 @@ async def _chain_notifier(
     params: dict | None,
     project_id: int | None,
     input_id: int | None,
+    input_version: int | None,
+    user_id: int | None,
 ) -> None:
     # El token se genera recién aquí (JobStore.create) y se pasa a notifier.sh, que es
     # el único script que llama a /app/job_callback y por tanto el único que lo necesita.
     record = await store.create(
-        job_id, node=node, kind=kind, params=params, project_id=project_id, input_id=input_id
+        job_id, node=node, kind=kind, params=params, project_id=project_id, input_id=input_id,
+        input_version=input_version, user_id=user_id,
     )
 
     callback_url = f"{settings.public_callback_base_url}/app/job_callback"
@@ -161,6 +164,8 @@ async def submit_with_failover(
     params: dict | None = None,
     project_id: int | None = None,
     input_id: int | None = None,
+    input_version: int | None = None,
+    user_id: int | None = None,
 ) -> tuple[str, str]:
     """Envía el job al mejor nodo disponible, probando los siguientes si falla. Devuelve (JOBID, nodo).
 
@@ -183,6 +188,7 @@ async def submit_with_failover(
         await _chain_notifier(
             pool=pool, store=store, settings=settings, node=node, job_id=job_id, script=script,
             kind=kind, params=params, project_id=project_id, input_id=input_id,
+            input_version=input_version, user_id=user_id,
         )
         return job_id, node
 

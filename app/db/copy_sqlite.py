@@ -23,7 +23,7 @@ from app.db.engine import display_url, dispose_engines, get_engine, normalize_ur
 from app.db.schema import metadata
 
 # Tablas con id autoincremental: en PostgreSQL hay que adelantar su secuencia tras copiar ids.
-_SERIAL_TABLES = ("projects", "expert_invitations", "expert_inputs")
+_SERIAL_TABLES = ("users", "projects", "expert_invitations", "expert_inputs", "expert_input_versions")
 
 
 class CopyError(Exception):

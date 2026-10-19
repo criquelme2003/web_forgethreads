@@ -180,3 +180,13 @@ details.card>summary{cursor:pointer;list-style:revert}
 .pv-kind-legend{display:inline-flex;gap:12px;align-items:center}
 .pv-kind-legend span{display:inline-flex;gap:5px;align-items:center}
 
+/* sesión, usuarios y admins del proyecto */
+.topbar-inner{gap:16px;flex-wrap:wrap}
+.session{display:flex;gap:10px;align-items:center;color:var(--muted)}
+.badge.user-activo{background:#d1fae5;color:var(--ok);border:1px solid #6ee7b7}
+.badge.user-pendiente{background:#fef3c7;color:var(--warn);border:1px solid #fcd34d}
+.badge.user-inactivo{background:#f3f4f6;color:var(--muted);border:1px solid #d1d5db}
+.badge.outdated{background:#fef3c7;color:var(--warn);border:1px solid #fcd34d}
+.people{display:flex;flex-direction:column;gap:6px;margin:8px 0 12px}
+.people-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.link-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}

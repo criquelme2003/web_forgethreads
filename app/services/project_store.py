@@ -10,13 +10,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import and_, func, insert, select, update
+from sqlalchemy import and_, func, insert, or_, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.db.engine import get_engine
-from app.db.schema import expert_inputs, expert_invitations, jobs, projects
+from app.db.schema import (
+    expert_input_versions,
+    expert_inputs,
+    expert_invitations,
+    jobs,
+    project_admins,
+    projects,
+)
 from app.services.job_store import resolve_database
 
 ProjectType = Literal["expertos", "simulacion"]
@@ -49,6 +56,10 @@ class InputNotFoundError(Exception):
     pass
 
 
+class InvitationHasInputError(Exception):
+    """La invitación ya tiene un input: no se elimina, se excluye (RF-51)."""
+
+
 @dataclass
 class Project:
     id: int
@@ -56,11 +67,15 @@ class Project:
     descripcion: str
     tipo: ProjectType
     estado: ProjectState
-    owner: str | None
+    owner_id: int | None
     created_at: datetime
     updated_at: datetime
     causas: list[str] = field(default_factory=list)
     efectos: list[str] = field(default_factory=list)
+    admin_ids: list[int] = field(default_factory=list)  # co-admins (RF-49)
+
+    def is_member(self, user_id: int) -> bool:
+        return user_id == self.owner_id or user_id in self.admin_ids
 
 
 @dataclass
@@ -70,6 +85,7 @@ class Invitation:
     email: str
     expira_at: datetime
     created_at: datetime
+    nombre: str | None = None
     usado_at: datetime | None = None
     revocado_at: datetime | None = None
     enviado_at: datetime | None = None
@@ -95,6 +111,33 @@ class ExpertInput:
     ce: list[list[float]] = field(repr=False, default_factory=list)
     ee: list[list[float]] = field(repr=False, default_factory=list)
     excluido: bool = False
+    version: int = 1
+    updated_at: datetime | None = None
+    editable_hasta: datetime | None = None
+
+    def editable(self, now: datetime | None = None) -> bool:
+        """Dentro del plazo en que el experto puede modificarlo (RF-52)."""
+        return self.editable_hasta is not None and self.editable_hasta > (now or datetime.now(UTC))
+
+
+@dataclass
+class InputVersion:
+    version: int
+    created_at: datetime
+
+
+@dataclass
+class InputAuthor:
+    """Experto al que pertenece un input, para atribuir los resultados (RF-54)."""
+
+    input_id: int
+    email: str
+    nombre: str | None
+    version: int
+
+    @property
+    def display(self) -> str:
+        return f"{self.nombre} <{self.email}>" if self.nombre else self.email
 
 
 def hash_token(token: str) -> str:
@@ -102,8 +145,11 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-async def _migrate_orphan_maxmin_jobs(conn: AsyncConnection, owner: str | None) -> None:
-    """RF-07: los jobs MaxMin anteriores a los proyectos pasan a un proyecto de simulación."""
+async def _migrate_orphan_maxmin_jobs(conn: AsyncConnection) -> None:
+    """RF-07: los jobs MaxMin anteriores a los proyectos pasan a un proyecto de simulación.
+
+    Queda sin dueño hasta que exista el superadmin (`UserStore.ensure_superadmin` se lo asigna).
+    """
     orphans = and_(jobs.c.kind == "maxmin", jobs.c.project_id.is_(None))
     count = await conn.scalar(select(func.count()).select_from(jobs).where(orphans))
     if not count:
@@ -116,7 +162,6 @@ async def _migrate_orphan_maxmin_jobs(conn: AsyncConnection, owner: str | None) 
             descripcion="Cálculos MaxMin lanzados antes de que existieran los proyectos.",
             tipo="simulacion",
             estado="abierto",
-            owner=owner,
             created_at=now,
             updated_at=now,
         )
@@ -126,17 +171,16 @@ async def _migrate_orphan_maxmin_jobs(conn: AsyncConnection, owner: str | None) 
 
 
 class ProjectStore:
-    def __init__(self, database: str | None = None, migration_owner: str | None = None) -> None:
+    def __init__(self, database: str | None = None) -> None:
         # URL de SQLAlchemy o ruta de un archivo SQLite; si es None, se resuelve desde Settings.
         self._database = database
-        self._migration_owner = migration_owner
         self._migrated = False
 
     async def _engine(self) -> AsyncEngine:
         engine = await get_engine(resolve_database(self._database))
         if not self._migrated:
             async with engine.begin() as conn:
-                await _migrate_orphan_maxmin_jobs(conn, self._migration_owner)
+                await _migrate_orphan_maxmin_jobs(conn)
             self._migrated = True
         return engine
 
@@ -163,7 +207,7 @@ class ProjectStore:
             descripcion=m["descripcion"] or "",
             tipo=m["tipo"],
             estado=m["estado"],
-            owner=m["owner"],
+            owner_id=m["owner_id"],
             created_at=m["created_at"],
             updated_at=m["updated_at"],
             causas=m["causas"] or [],
@@ -175,7 +219,15 @@ class ProjectStore:
         row = (await conn.execute(select(projects).where(projects.c.id == project_id))).first()
         if row is None:
             raise ProjectNotFoundError(f"Proyecto {project_id} no existe")
-        return ProjectStore._row_to_project(row)
+        project = ProjectStore._row_to_project(row)
+        project.admin_ids = list(
+            await conn.scalars(
+                select(project_admins.c.user_id)
+                .where(project_admins.c.project_id == project_id)
+                .order_by(project_admins.c.created_at, project_admins.c.user_id)
+            )
+        )
+        return project
 
     async def create_project(
         self,
@@ -183,7 +235,7 @@ class ProjectStore:
         nombre: str,
         descripcion: str,
         tipo: ProjectType,
-        owner: str | None,
+        owner_id: int | None,
         causas: list[str] | None = None,
         efectos: list[str] | None = None,
     ) -> Project:
@@ -194,7 +246,7 @@ class ProjectStore:
                 insert(projects)
                 .values(
                     nombre=nombre, descripcion=descripcion, tipo=tipo, estado=INITIAL_STATE[tipo],
-                    owner=owner, causas=causas or [], efectos=efectos or [],
+                    owner_id=owner_id, causas=causas or [], efectos=efectos or [],
                     created_at=now, updated_at=now,
                 )
                 .returning(projects.c.id)
@@ -206,14 +258,85 @@ class ProjectStore:
     async def get_project(self, project_id: int) -> Project:
         return await self._read(lambda conn: self._get_project(conn, project_id))
 
-    async def list_projects(self) -> list[Project]:
+    async def list_projects(self, member_id: int | None = None) -> list[Project]:
+        """Todos los proyectos o, con `member_id`, solo aquellos de los que es dueño o co-admin."""
+
         async def fn(conn: AsyncConnection) -> list[Project]:
+            query = select(projects).order_by(projects.c.created_at.desc(), projects.c.id.desc())
+            if member_id is not None:
+                query = query.where(
+                    or_(
+                        projects.c.owner_id == member_id,
+                        projects.c.id.in_(
+                            select(project_admins.c.project_id).where(
+                                project_admins.c.user_id == member_id
+                            )
+                        ),
+                    )
+                )
+            found = [self._row_to_project(r) for r in await conn.execute(query)]
+            admins: dict[int, list[int]] = {}
             rows = await conn.execute(
-                select(projects).order_by(projects.c.created_at.desc(), projects.c.id.desc())
+                select(project_admins.c.project_id, project_admins.c.user_id).order_by(
+                    project_admins.c.created_at, project_admins.c.user_id
+                )
             )
-            return [self._row_to_project(r) for r in rows]
+            for pid, uid in rows:
+                admins.setdefault(pid, []).append(uid)
+            for p in found:
+                p.admin_ids = admins.get(p.id, [])
+            return found
 
         return await self._read(fn)
+
+    async def accessible_project_ids(self, member_id: int) -> set[int]:
+        return {p.id for p in await self.list_projects(member_id)}
+
+    # --- dueño y co-admins (RF-03, RF-49) ----------------------------------------------------
+
+    async def add_admin(self, project_id: int, user_id: int) -> Project:
+        async def fn(conn: AsyncConnection) -> Project:
+            project = await self._get_project(conn, project_id)
+            if not project.is_member(user_id):
+                await conn.execute(
+                    insert(project_admins).values(
+                        project_id=project_id, user_id=user_id, created_at=datetime.now(UTC)
+                    )
+                )
+            return await self._get_project(conn, project_id)
+
+        return await self._write(fn)
+
+    async def remove_admin(self, project_id: int, user_id: int) -> Project:
+        async def fn(conn: AsyncConnection) -> Project:
+            await self._get_project(conn, project_id)
+            await conn.execute(
+                sql_delete(project_admins).where(
+                    project_admins.c.project_id == project_id, project_admins.c.user_id == user_id
+                )
+            )
+            return await self._get_project(conn, project_id)
+
+        return await self._write(fn)
+
+    async def set_owner(self, project_id: int, user_id: int) -> Project:
+        """Transfiere la propiedad; si el nuevo dueño era co-admin, deja de figurar como tal."""
+
+        async def fn(conn: AsyncConnection) -> Project:
+            await self._get_project(conn, project_id)
+            await conn.execute(
+                update(projects)
+                .where(projects.c.id == project_id)
+                .values(owner_id=user_id, updated_at=datetime.now(UTC))
+            )
+            await conn.execute(
+                sql_delete(project_admins).where(
+                    project_admins.c.project_id == project_id, project_admins.c.user_id == user_id
+                )
+            )
+            return await self._get_project(conn, project_id)
+
+        return await self._write(fn)
 
     async def project_counts(self) -> dict[int, dict[str, int]]:
         """Conteos por proyecto para la lista: invitaciones, inputs y cálculos."""
@@ -259,6 +382,9 @@ class ProjectStore:
             await conn.execute(
                 sql_delete(expert_invitations).where(expert_invitations.c.project_id == project_id)
             )
+            await conn.execute(
+                sql_delete(project_admins).where(project_admins.c.project_id == project_id)
+            )
             await conn.execute(sql_delete(projects).where(projects.c.id == project_id))
 
         await self._write(fn)
@@ -272,6 +398,7 @@ class ProjectStore:
             id=m["id"],
             project_id=m["project_id"],
             email=m["email"],
+            nombre=m["nombre"],
             expira_at=m["expira_at"],
             created_at=m["created_at"],
             usado_at=m["usado_at"],
@@ -294,7 +421,9 @@ class ProjectStore:
             raise InvitationNotFoundError(f"Invitación {invitation_id} no existe")
         return ProjectStore._row_to_invitation(row)
 
-    async def create_invitation(self, project_id: int, email: str, ttl: timedelta) -> tuple[Invitation, str]:
+    async def create_invitation(
+        self, project_id: int, email: str, ttl: timedelta, nombre: str | None = None
+    ) -> tuple[Invitation, str]:
         """Crea la invitación y devuelve el token en claro, que no se vuelve a poder leer."""
         token = secrets.token_urlsafe(32)
         now = datetime.now(UTC)
@@ -304,8 +433,8 @@ class ProjectStore:
             invitation_id = await conn.scalar(
                 insert(expert_invitations)
                 .values(
-                    project_id=project_id, email=email, token_hash=hash_token(token),
-                    expira_at=now + ttl, created_at=now,
+                    project_id=project_id, email=email, nombre=nombre or None,
+                    token_hash=hash_token(token), expira_at=now + ttl, created_at=now,
                 )
                 .returning(expert_invitations.c.id)
             )
@@ -365,6 +494,22 @@ class ProjectStore:
 
         return await self._write(fn), token
 
+    async def delete_invitation(self, project_id: int, invitation_id: int) -> None:
+        """Elimina a un experto que no ha enviado input (RF-51); su enlace deja de funcionar."""
+
+        async def fn(conn: AsyncConnection) -> None:
+            inv = await self._get_invitation(conn, project_id, invitation_id)
+            has_input = await conn.scalar(
+                select(expert_inputs.c.id).where(expert_inputs.c.invitation_id == inv.id)
+            )
+            if inv.usado_at or has_input is not None:
+                raise InvitationHasInputError("El experto ya envió su input: exclúyelo en vez de eliminarlo")
+            await conn.execute(
+                sql_delete(expert_invitations).where(expert_invitations.c.id == invitation_id)
+            )
+
+        await self._write(fn)
+
     async def set_delivery(self, invitation_id: int, error: str | None) -> None:
         """Registra el resultado del envío por correo."""
 
@@ -406,6 +551,9 @@ class ProjectStore:
             ce=m["ce"],
             ee=m["ee"],
             excluido=bool(m["excluido"]),
+            version=m["version"] or 1,
+            updated_at=m["updated_at"] or m["created_at"],
+            editable_hasta=m["editable_hasta"],
         )
 
     @staticmethod
@@ -427,17 +575,20 @@ class ProjectStore:
         cc: list[list[float]],
         ce: list[list[float]],
         ee: list[list[float]],
+        edit_window: timedelta = timedelta(0),
     ) -> ExpertInput:
-        """Guarda el input y consume el token en la misma transacción (RF-11, RF-20).
+        """Guarda el input del experto (RF-11, RF-20, RF-52, RF-53).
 
-        Lanza InvitationUnavailableError si el token ya se usó, se revocó o expiró entre la
-        validación y la confirmación (dos envíos simultáneos: solo uno gana).
+        En el primer envío consume la invitación y crea el input (versión 1), editable durante
+        `edit_window`. Dentro de ese plazo, cada nuevo envío con el mismo token guarda una versión
+        nueva. Lanza InvitationUnavailableError si el token no sirve: no existe, se revocó,
+        expiró sin respuesta o venció el plazo de edición. Las operaciones son UPDATE condicionados:
+        de dos envíos simultáneos solo uno gana.
         """
         now = datetime.now(UTC)
         token_hash = hash_token(token)
 
         async def fn(conn: AsyncConnection) -> ExpertInput:
-            # El UPDATE condicionado es atómico: de dos envíos simultáneos solo uno lo aplica.
             inv = (
                 await conn.execute(
                     update(expert_invitations)
@@ -451,19 +602,95 @@ class ProjectStore:
                     .returning(expert_invitations.c.id, expert_invitations.c.project_id)
                 )
             ).first()
-            if inv is None:
-                raise InvitationUnavailableError("La invitación ya no está disponible")
-            input_id = await conn.scalar(
-                insert(expert_inputs)
-                .values(
-                    project_id=inv.project_id, invitation_id=inv.id, cc=cc, ce=ce, ee=ee,
-                    created_at=now,
+            if inv is not None:
+                input_id = await conn.scalar(
+                    insert(expert_inputs)
+                    .values(
+                        project_id=inv.project_id, invitation_id=inv.id, cc=cc, ce=ce, ee=ee,
+                        created_at=now, updated_at=now, version=1,
+                        editable_hasta=now + edit_window if edit_window else None,
+                    )
+                    .returning(expert_inputs.c.id)
                 )
-                .returning(expert_inputs.c.id)
+                version = 1
+            else:
+                edited = (
+                    await conn.execute(
+                        update(expert_inputs)
+                        .where(
+                            expert_inputs.c.invitation_id.in_(
+                                select(expert_invitations.c.id).where(
+                                    expert_invitations.c.token_hash == token_hash,
+                                    expert_invitations.c.revocado_at.is_(None),
+                                )
+                            ),
+                            expert_inputs.c.editable_hasta > now,
+                        )
+                        .values(
+                            cc=cc, ce=ce, ee=ee, updated_at=now, version=expert_inputs.c.version + 1
+                        )
+                        .returning(
+                            expert_inputs.c.id, expert_inputs.c.project_id, expert_inputs.c.version
+                        )
+                    )
+                ).first()
+                if edited is None:
+                    raise InvitationUnavailableError("La invitación ya no está disponible")
+                input_id, version = edited.id, edited.version
+                inv = edited
+            await conn.execute(
+                insert(expert_input_versions).values(
+                    input_id=input_id, version=version, cc=cc, ce=ce, ee=ee, created_at=now
+                )
             )
             return await self._get_input(conn, inv.project_id, input_id)
 
         return await self._write(fn)
+
+    async def find_input_by_invitation(self, invitation_id: int) -> ExpertInput | None:
+        async def fn(conn: AsyncConnection) -> ExpertInput | None:
+            row = (
+                await conn.execute(
+                    select(expert_inputs).where(expert_inputs.c.invitation_id == invitation_id)
+                )
+            ).first()
+            return self._row_to_input(row) if row else None
+
+        return await self._read(fn)
+
+    async def list_input_versions(self, project_id: int, input_id: int) -> list[InputVersion]:
+        async def fn(conn: AsyncConnection) -> list[InputVersion]:
+            await self._get_input(conn, project_id, input_id)
+            rows = await conn.execute(
+                select(expert_input_versions.c.version, expert_input_versions.c.created_at)
+                .where(expert_input_versions.c.input_id == input_id)
+                .order_by(expert_input_versions.c.version.desc())
+            )
+            return [InputVersion(version=v, created_at=c) for v, c in rows]
+
+        return await self._read(fn)
+
+    async def input_authors(self, input_ids: list[int]) -> dict[int, InputAuthor]:
+        """Experto de cada input (RF-54)."""
+        ids = sorted({i for i in input_ids if i is not None})
+        if not ids:
+            return {}
+
+        async def fn(conn: AsyncConnection) -> dict[int, InputAuthor]:
+            rows = await conn.execute(
+                select(
+                    expert_inputs.c.id, expert_invitations.c.email, expert_invitations.c.nombre,
+                    expert_inputs.c.version,
+                )
+                .join(expert_invitations, expert_invitations.c.id == expert_inputs.c.invitation_id)
+                .where(expert_inputs.c.id.in_(ids))
+            )
+            return {
+                r.id: InputAuthor(input_id=r.id, email=r.email, nombre=r.nombre, version=r.version or 1)
+                for r in rows
+            }
+
+        return await self._read(fn)
 
     async def list_inputs(self, project_id: int) -> list[ExpertInput]:
         async def fn(conn: AsyncConnection) -> list[ExpertInput]:

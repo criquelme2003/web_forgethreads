@@ -17,6 +17,7 @@ from app.services.job_store import JobStore
 from app.services.node_selector import NodeSelector
 from app.services.project_store import ProjectNotFoundError, ProjectStore
 from app.services.slurm_submit import build_new_job_command
+from app.services.user_store import User
 from app.ssh.pool import SSHConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ def _normalize_payload(payload: dict) -> dict:
 @router.post("/app/execute_maxmin", response_model=ExecuteMaxMinAckResponse)
 async def execute_maxmin(
     payload: dict,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     settings: Annotated[Settings, Depends(get_settings)],
     store: Annotated[JobStore, Depends(get_job_store)],
     projects: Annotated[ProjectStore, Depends(get_project_store)],
@@ -94,6 +95,8 @@ async def execute_maxmin(
     try:
         project = await projects.get_project(data.project_id)
     except ProjectNotFoundError:
+        project = None
+    if project is None or not (user.is_superadmin or project.is_member(user.id)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Proyecto {data.project_id} no existe")
     if project.tipo != "simulacion":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "El proyecto no es de simulación")
@@ -122,6 +125,7 @@ async def execute_maxmin(
         kind="maxmin",
         params=data.model_dump(exclude={"nodo", "project_id"}),
         project_id=project.id,
+        user_id=user.id,
     )
 
     return ExecuteMaxMinAckResponse(job_id=job_id, status="pending")

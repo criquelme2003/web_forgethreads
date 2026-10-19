@@ -13,14 +13,23 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_job_store, get_node_selector, get_ssh_pool, require_user
+from app.api.deps import (
+    get_job_store,
+    get_node_selector,
+    get_project_store,
+    get_ssh_pool,
+    require_user,
+)
+from app.api.job_callback import get_visible_job
 from app.api.launch import submit_with_failover
 from app.core.config import Settings, get_settings
 from app.services.fe_input import FeInput, load_fe_input
 from app.services.fe_remote import build_fe_input_files, download_fe_results, upload_fe_input
-from app.services.job_store import JobNotFoundError, JobRecord, JobStore
+from app.services.job_store import JobRecord, JobStore
 from app.services.node_selector import NodeSelector
+from app.services.project_store import InputAuthor, ProjectStore
 from app.services.slurm_submit import build_fe_job_command
+from app.services.user_store import User
 from app.ssh.pool import SSHConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -122,6 +131,8 @@ async def launch_fe_job(
     maxorder: int,
     project_id: int | None = None,
     input_id: int | None = None,
+    input_version: int | None = None,
+    user_id: int | None = None,
 ) -> tuple[str, str]:
     """Sube las matrices al nodo por SFTP y lanza fe_job.sh + notifier. Devuelve (JOBID, nodo).
 
@@ -158,13 +169,15 @@ async def launch_fe_job(
         params={**meta, "request_id": request_id},
         project_id=project_id,
         input_id=input_id,
+        input_version=input_version,
+        user_id=user_id,
     )
 
 
 @router.post("/app/fe/validate", response_model=FeValidationResponse)
 async def validate_fe_input(
     body: FeMatricesRequest,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
 ) -> FeValidationResponse:
     """Vista previa: parsea las tres matrices y devuelve los errores por celda sin lanzar nada."""
     return _validation_response(load_fe_input(body.cc, body.ce, body.ee))
@@ -173,7 +186,7 @@ async def validate_fe_input(
 @router.post("/app/fe/execute", response_model=FeExecuteResponse)
 async def execute_fe(
     body: FeExecuteRequest,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     settings: Annotated[Settings, Depends(get_settings)],
     store: Annotated[JobStore, Depends(get_job_store)],
     pool: Annotated[SSHConnectionPool, Depends(get_ssh_pool)],
@@ -200,17 +213,17 @@ async def execute_fe(
         effects=data.effects,
         thr=body.thr,
         maxorder=body.maxorder,
+        user_id=user.id,
     )
     return FeExecuteResponse(job_id=job_id, node=node, warnings=data.warnings)
 
 
-async def _get_fe_record(job_id: str, store: JobStore) -> JobRecord:
+async def _get_fe_record(
+    job_id: str, user: User, store: JobStore, projects: ProjectStore
+) -> JobRecord:
     if not _JOB_ID_RE.fullmatch(job_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown job_id: {job_id}")
-    try:
-        record = await store.get(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown job_id: {job_id}")
+    record = await get_visible_job(job_id, user, store, projects)
     if record.kind != "fe":
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"El job {job_id} no es un cálculo de caminos")
     if record.status != "success":
@@ -271,13 +284,14 @@ def _read_table(path: Path, order: int, hidden: tuple[str, ...]) -> PathsTable:
 @router.get("/app/fe/jobs/{job_id}/paths", response_model=FePathsResponse)
 async def get_fe_paths(
     job_id: str,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     settings: Annotated[Settings, Depends(get_settings)],
     store: Annotated[JobStore, Depends(get_job_store)],
+    projects: Annotated[ProjectStore, Depends(get_project_store)],
     pool: Annotated[SSHConnectionPool, Depends(get_ssh_pool)],
 ) -> FePathsResponse:
     """Tablas de caminos por orden (From, Through…, To, Mean). Se descargan del nodo la primera vez."""
-    record = await _get_fe_record(job_id, store)
+    record = await _get_fe_record(job_id, user, store, projects)
     local_dir = await _ensure_local_results(record, settings, pool)
     k = (record.result or {}).get("k")
     hidden = SINGLE_EXPERT_HIDDEN_COLUMNS if k == 1 else ()
@@ -297,17 +311,32 @@ async def get_fe_paths(
 async def download_fe_paths_csv(
     job_id: str,
     order: int,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     settings: Annotated[Settings, Depends(get_settings)],
     store: Annotated[JobStore, Depends(get_job_store)],
+    projects: Annotated[ProjectStore, Depends(get_project_store)],
     pool: Annotated[SSHConnectionPool, Depends(get_ssh_pool)],
 ) -> FileResponse:
-    """CSV crudo de un orden, tal como lo escribió fe_job en el nodo."""
-    record = await _get_fe_record(job_id, store)
+    """CSV crudo de un orden, tal como lo escribió fe_job en el nodo.
+
+    El nombre del archivo indica el experto del cálculo, si lo hay (RF-54).
+    """
+    record = await _get_fe_record(job_id, user, store, projects)
     if order not in _result_orders(record):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"El job {job_id} no tiene caminos de orden {order}")
     local_dir = await _ensure_local_results(record, settings, pool)
     filename = f"paths_order_{order}.csv"
+    authors = await projects.input_authors([record.input_id]) if record.input_id else {}
+    expert = _filename_part(authors.get(record.input_id))
     return FileResponse(
-        local_dir / filename, media_type="text/csv", filename=f"fe_{job_id}_{filename}"
+        local_dir / filename,
+        media_type="text/csv",
+        filename=f"fe_{job_id}_{expert + '_' if expert else ''}{filename}",
     )
+
+
+def _filename_part(author: InputAuthor | None) -> str:
+    """Nombre (o correo) del experto apto para un nombre de archivo."""
+    if author is None:
+        return ""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", author.nombre or author.email).strip("_")[:60]

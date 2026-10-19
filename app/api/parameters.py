@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.api.deps import get_node_selector, require_user
 from app.services.node_selector import NodeSelector
+from app.services.user_store import User
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class AvailableNodesResponse(BaseModel):
 
 @router.get("/nodes/available", response_model=AvailableNodesResponse)
 async def available_nodes(
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
 ) -> AvailableNodesResponse:
     """Opciones de nodo/GPU para el formulario de parámetros (antes render server-side con Jinja)."""

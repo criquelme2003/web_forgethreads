@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 
 export default function Login() {
   const [params] = useSearchParams();
-  const next = params.get('next') || '/front/parameters';
+  const next = params.get('next') || '/front/projects';
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState('');
@@ -46,22 +46,18 @@ export default function Login() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">forgethreads <span>· acceso</span></div>
-          <nav className="nav">
-            <a href="/front/parameters">Parámetros</a>
-            <a href="/front/gpu_status">GPU</a>
-          </nav>
         </div>
       </header>
       <main className="wrap-login">
         <div className="card card-login">
           <h1>Iniciar sesión</h1>
-          <p className="sub">Accede para encolar tareas MaxMin.</p>
+          <p className="sub">Administradores: entra con tu correo.</p>
           <form className="grid-tight" onSubmit={onSubmit} noValidate>
             <div className="field">
-              <label htmlFor="username">Usuario</label>
+              <label htmlFor="username">Correo</label>
               <input
                 id="username" type="text" name="username" required autoComplete="username"
-                placeholder="usuario" value={username} onChange={(e) => setUsername(e.target.value)}
+                placeholder="correo@uct.cl" value={username} onChange={(e) => setUsername(e.target.value)}
               />
             </div>
             <div className="field">
@@ -77,8 +73,7 @@ export default function Login() {
             <div className={`status ${kind}`} role="status" aria-live="polite">{msg}</div>
           </form>
           <div className="foot">
-            <span>POST <span className="mono">/auth/login</span></span>
-            <span className="mono">v1</span>
+            <span>¿Olvidaste tu contraseña? Pide un enlace nuevo al superadmin.</span>
           </div>
         </div>
       </main>

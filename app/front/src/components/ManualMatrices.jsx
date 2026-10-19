@@ -45,11 +45,26 @@ function labelProblems(causes, effects) {
  * Ingreso manual de CC, CE y EE. Genera los mismos CSV que se subirían como archivo, así que la
  * validación y el lanzamiento son los del flujo de CSV. La diagonal de CC y EE queda fija en 1.
  */
-export default function ManualMatrices({ onChange, errors, fixedLabels }) {
+/** Valores iniciales ({cc, ce, ee} en el orden de `labels`) como celdas editables. */
+function initialCells(initial, labels) {
+  const values = {};
+  if (!initial || !labels) return values;
+  for (const m of MATRICES) {
+    const data = initial[m.name.toLowerCase()] || [];
+    labels[m.rows].forEach((r, i) => labels[m.cols].forEach((c, j) => {
+      const v = data[i]?.[j];
+      if (v != null && !isDiagonal(m, i, j)) values[cellKey(m.name, r, c)] = String(Math.round(v * 1e6) / 1e6);
+    }));
+  }
+  return values;
+}
+
+export default function ManualMatrices({ onChange, errors, fixedLabels, initial }) {
   // Con `fixedLabels` (proyecto de expertos) las etiquetas vienen dadas y no se editan.
+  // Con `initial` (el experto modifica su envío) las celdas parten con los valores enviados.
   const [causesText, setCausesText] = useState(fixedLabels ? fixedLabels.causes.join('\n') : '');
   const [effectsText, setEffectsText] = useState(fixedLabels ? fixedLabels.effects.join('\n') : '');
-  const [values, setValues] = useState({}); // cellKey -> texto, sobrevive a reordenar etiquetas
+  const [values, setValues] = useState(() => initialCells(initial, fixedLabels)); // cellKey -> texto, sobrevive a reordenar etiquetas
   const causes = useMemo(() => parseLabels(causesText), [causesText]);
   const effects = useMemo(() => parseLabels(effectsText), [effectsText]);
   const labels = { causes, effects };

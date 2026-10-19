@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app.api.deps import require_user
 from app.core.config import Settings, get_settings
 from app.db.engine import display_url
+from app.services.user_store import User
 
 router = APIRouter(tags=["meta"], prefix="/app")
 
@@ -17,7 +18,7 @@ class UiMetaResponse(BaseModel):
 
 @router.get("/ui-meta", response_model=UiMetaResponse)
 async def ui_meta(
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> UiMetaResponse:
     """Valores de configuración que el SPA muestra en pantalla (antes interpolados por Jinja)."""

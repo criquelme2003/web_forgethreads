@@ -147,16 +147,20 @@ export default function Projects() {
         <div style={{ overflow: 'auto' }}>
           <table>
             <thead>
-              <tr><th>Nombre</th><th>Tipo</th><th>Estado</th><th>Invitaciones</th><th>Inputs</th><th>Cálculos</th><th>Creado</th></tr>
+              <tr><th>Nombre</th><th>Tipo</th><th>Estado</th><th>Dueño</th><th>Invitaciones</th><th>Inputs</th><th>Cálculos</th><th>Creado</th></tr>
             </thead>
             <tbody>
-              {projects === null && <tr><td colSpan="7" className="empty">Cargando…</td></tr>}
-              {projects !== null && shown.length === 0 && <tr><td colSpan="7" className="empty">Sin proyectos</td></tr>}
+              {projects === null && <tr><td colSpan="8" className="empty">Cargando…</td></tr>}
+              {projects !== null && shown.length === 0 && <tr><td colSpan="8" className="empty">Sin proyectos</td></tr>}
               {shown.map((p) => (
                 <tr key={p.id}>
                   <td><Link to={`/projects/${p.id}`}>{p.nombre}</Link></td>
                   <td>{TIPO_LABELS[p.tipo] || p.tipo}</td>
                   <td><span className={`badge estado-${p.estado}`}>{p.estado}</span></td>
+                  <td className="small">
+                    {p.owner ? p.owner.nombre || p.owner.email : '—'}
+                    {p.admins.length > 0 && <span className="muted"> +{p.admins.length}</span>}
+                  </td>
                   <td>{p.tipo === 'expertos' ? p.conteos.invitaciones || 0 : '—'}</td>
                   <td>{p.tipo === 'expertos' ? p.conteos.inputs || 0 : '—'}</td>
                   <td>{p.conteos.calculos || 0}</td>

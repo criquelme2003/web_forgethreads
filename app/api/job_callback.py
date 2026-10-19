@@ -4,9 +4,11 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_job_store, require_user
+from app.api.deps import get_job_store, get_project_store, require_user
 from app.services.job_store import JobNotFoundError, JobRecord, JobStore
 from app.services.maxmin_log import parse_maxmin_log
+from app.services.project_store import InputAuthor, ProjectNotFoundError, ProjectStore
+from app.services.user_store import User
 
 router = APIRouter(tags=["jobs"])
 
@@ -32,6 +34,16 @@ class JobCallbackPayload(BaseModel):
         return {k: v for k, v in data.items() if k not in _PAYLOAD_FIELDS}
 
 
+class ExpertRef(BaseModel):
+    """Experto al que pertenece el cálculo (RF-54)."""
+
+    input_id: int
+    email: str
+    nombre: str | None
+    input_version: int  # versión del input usada en el cálculo
+    version_vigente: int  # versión actual del input (RF-53)
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: Literal["pending", "success", "error", "partial"]
@@ -46,9 +58,10 @@ class JobStatusResponse(BaseModel):
     result: dict | None = None
     project_id: int | None = None
     input_id: int | None = None
+    experto: ExpertRef | None = None
 
     @classmethod
-    def from_record(cls, r: JobRecord) -> "JobStatusResponse":
+    def from_record(cls, r: JobRecord, author: InputAuthor | None = None) -> "JobStatusResponse":
         return cls(
             job_id=r.job_id,
             status=r.status,
@@ -63,7 +76,45 @@ class JobStatusResponse(BaseModel):
             result=r.result,
             project_id=r.project_id,
             input_id=r.input_id,
+            experto=ExpertRef(
+                input_id=author.input_id, email=author.email, nombre=author.nombre,
+                input_version=r.input_version or 1, version_vigente=author.version,
+            )
+            if author
+            else None,
         )
+
+
+async def job_responses(records: list[JobRecord], projects: ProjectStore) -> list[JobStatusResponse]:
+    """Respuestas con el experto de cada cálculo, si viene de un input (RF-54)."""
+    authors = await projects.input_authors([r.input_id for r in records if r.input_id is not None])
+    return [JobStatusResponse.from_record(r, authors.get(r.input_id)) for r in records]
+
+
+async def can_see_job(record: JobRecord, user: User, projects: ProjectStore) -> bool:
+    """Superadmin: todo. Admin: cálculos de sus proyectos y los sueltos que lanzó él (RF-03)."""
+    if user.is_superadmin:
+        return True
+    if record.project_id is None:
+        return record.user_id == user.id
+    try:
+        project = await projects.get_project(record.project_id)
+    except ProjectNotFoundError:
+        return False
+    return project.is_member(user.id)
+
+
+async def get_visible_job(
+    job_id: str, user: User, store: JobStore, projects: ProjectStore
+) -> JobRecord:
+    """El job si el usuario puede verlo; si no, 404 como si no existiera."""
+    try:
+        record = await store.get(job_id)
+    except JobNotFoundError:
+        record = None
+    if record is None or not await can_see_job(record, user, projects):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown job_id: {job_id}")
+    return record
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -100,26 +151,31 @@ async def job_callback(
 
 @router.get("/app/jobs", response_model=list[JobStatusResponse])
 async def list_jobs(
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     store: Annotated[JobStore, Depends(get_job_store)],
+    projects: Annotated[ProjectStore, Depends(get_project_store)],
     status: str | None = None,
 ) -> list[JobStatusResponse]:
-    """Lista trabajos; ?status=pending filtra pendientes (para polling). SQLite persiste entre reinicios."""
-    records = await store.list_all()
-    return [JobStatusResponse.from_record(r) for r in records if not status or r.status == status]
+    """Lista los trabajos visibles para el usuario; ?status=pending filtra pendientes (para polling)."""
+    records = [r for r in await store.list_all() if not status or r.status == status]
+    if not user.is_superadmin:
+        mine = await projects.accessible_project_ids(user.id)
+        records = [
+            r for r in records
+            if (r.project_id in mine if r.project_id is not None else r.user_id == user.id)
+        ]
+    return await job_responses(records, projects)
 
 
 @router.get("/app/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job(
     job_id: str,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     store: Annotated[JobStore, Depends(get_job_store)],
+    projects: Annotated[ProjectStore, Depends(get_project_store)],
 ) -> JobStatusResponse:
-    try:
-        record = await store.get(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown job_id: {job_id}")
-    return JobStatusResponse.from_record(record)
+    record = await get_visible_job(job_id, user, store, projects)
+    return (await job_responses([record], projects))[0]
 
 
 class EffectsByOrder(BaseModel):
@@ -139,14 +195,12 @@ class MaxMinResultResponse(BaseModel):
 @router.get("/app/maxmin/jobs/{job_id}", response_model=MaxMinResultResponse)
 async def get_maxmin_result(
     job_id: str,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     store: Annotated[JobStore, Depends(get_job_store)],
+    projects: Annotated[ProjectStore, Depends(get_project_store)],
 ) -> MaxMinResultResponse:
     """Job MaxMin con los efectos por orden leídos de su log (vacío mientras está pendiente)."""
-    try:
-        record = await store.get(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown job_id: {job_id}")
+    record = await get_visible_job(job_id, user, store, projects)
     if record.kind != "maxmin":
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"El job {job_id} no es un cálculo MaxMin")
     parsed = parse_maxmin_log(record.logs)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiFetch, apiJson } from '../api.js';
+import { apiJson, fetchMe, send } from '../api.js';
+import LinkBox from '../components/LinkBox.jsx';
 import { errorText } from '../components/MatricesInput.jsx';
 import MaxMinForm from '../components/MaxMinForm.jsx';
 import { ExpertFields, expertPayload, fmtDate, TIPO_LABELS } from './Projects.jsx';
@@ -20,16 +21,6 @@ const TRANSITION_CONFIRM = {
     abierto: '¿Cerrar el proyecto? No se aceptarán nuevas respuestas ni cálculos hasta reabrirlo.',
   },
 };
-
-async function send(path, method, body) {
-  const res = await apiFetch(path, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
-}
 
 function jobBadge(status) {
   return ['pending', 'success', 'partial'].includes(status) ? status : 'error';
@@ -83,43 +74,31 @@ function EditProject({ project, onSaved, onCancel }) {
 
 // --- invitaciones ------------------------------------------------------------------------------
 
-function LinkBox({ invitation, onClose }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(invitation.link);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {}
-  }
-  let delivery;
-  if (invitation.envio === 'manual') delivery = 'Copia el enlace y envíaselo al experto.';
-  else if (invitation.envio_error) delivery = `No se pudo enviar el correo (${invitation.envio_error}). Envía el enlace a mano.`;
-  else delivery = `Enviado por correo a ${invitation.email}. También puedes copiar el enlace.`;
+function expertName(item) {
+  return item.nombre ? `${item.nombre} <${item.email}>` : item.email;
+}
+
+function InvitationLink({ invitation, onClose }) {
   return (
-    <div className="validation" style={{ marginBottom: 12 }}>
-      <div className="small" style={{ marginBottom: 6 }}>
-        <strong>Enlace para {invitation.email}</strong>{' '}
-        <span className={invitation.envio_error ? 'status err' : 'muted'}>{delivery}</span>
-      </div>
-      <div className="controls" style={{ marginBottom: 0 }}>
-        <input className="mono link-input" readOnly value={invitation.link} onFocus={(e) => e.target.select()} aria-label="Enlace de invitación" />
-        <button type="button" onClick={copy}>{copied ? 'Copiado' : 'Copiar'}</button>
-        <button type="button" onClick={onClose}>Ocultar</button>
-      </div>
-      <div className="small muted" style={{ marginTop: 6 }}>
-        Solo se muestra ahora: si se pierde, regenera la invitación (el enlace anterior deja de funcionar).
-      </div>
-    </div>
+    <LinkBox
+      title={`Enlace para ${expertName(invitation)}`}
+      link={invitation.link}
+      envio={invitation.envio}
+      envioError={invitation.envio_error}
+      email={invitation.email}
+      onClose={onClose}
+      hint="Solo se muestra ahora: si se pierde, regenera la invitación (el enlace anterior deja de funcionar)."
+    />
   );
 }
 
 function Invitations({ project, onChanged, refreshKey }) {
   const [items, setItems] = useState(null);
   const [email, setEmail] = useState('');
+  const [nombre, setNombre] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const [link, setLink] = useState(null);
+  const [links, setLinks] = useState([]); // enlaces recién generados (se ven solo ahora)
   const closed = project.estado === 'cerrado';
 
   const load = useCallback(async () => {
@@ -135,12 +114,13 @@ function Invitations({ project, onChanged, refreshKey }) {
     e.preventDefault();
     setBusy(true);
     setMsg('');
-    const { ok, data } = await send(`/app/projects/${project.id}/invitations`, 'POST', { email: email.trim() })
+    const { ok, data } = await send(`/app/projects/${project.id}/invitations`, 'POST', { email: email.trim(), nombre: nombre.trim() || null })
       .catch(() => ({ ok: false, data: {} }));
     setBusy(false);
     if (ok) {
-      setLink(data);
+      setLinks([data]);
       setEmail('');
+      setNombre('');
       load();
       onChanged();
     } else {
@@ -156,7 +136,36 @@ function Invitations({ project, onChanged, refreshKey }) {
       setMsg(errorText(data, 'No se pudo actualizar la invitación'));
       return;
     }
-    if (verb === 'regenerate') setLink(data);
+    if (verb === 'regenerate') setLinks([data]);
+    load();
+  }
+
+  async function remove(inv) {
+    if (!window.confirm(`¿Eliminar a ${inv.email} del proyecto? Su enlace dejará de funcionar.`)) return;
+    const { ok, data } = await send(`/app/projects/${project.id}/invitations/${inv.id}`, 'DELETE')
+      .catch(() => ({ ok: false, data: {} }));
+    if (!ok) setMsg(errorText(data, 'No se pudo eliminar'));
+    load();
+    onChanged();
+  }
+
+  const pending = (items || []).filter((i) => i.estado === 'pendiente' || i.estado === 'expirada');
+
+  /** Reenvío por lotes a quienes no han respondido (RF-50): regenera cada enlace. */
+  async function resendPending() {
+    const list = pending.map((i) => i.email).join(', ');
+    if (!window.confirm(`¿Reenviar a ${pending.length} expertos sin respuesta (${list})? Sus enlaces anteriores dejarán de funcionar.`)) return;
+    setBusy(true);
+    setMsg('');
+    const { ok, data } = await send(`/app/projects/${project.id}/invitations/resend`, 'POST', {})
+      .catch(() => ({ ok: false, data: {} }));
+    setBusy(false);
+    if (!ok) {
+      setMsg(errorText(data, 'No se pudo reenviar'));
+      return;
+    }
+    setLinks(data.reenviadas);
+    if (data.omitidas.length) setMsg(`${data.omitidas.length} omitidas: ${data.omitidas.map((o) => o.detail).join(', ')}`);
     load();
   }
 
@@ -164,26 +173,38 @@ function Invitations({ project, onChanged, refreshKey }) {
     <div className="card">
       <h2>Invitaciones</h2>
       <p className="sub">
-        Cada experto recibe un enlace personal de un solo uso. Solo puede responder mientras el proyecto está <strong>abierto</strong>.
+        Cada experto recibe un enlace personal. Solo puede responder mientras el proyecto está <strong>abierto</strong>;
+        después de enviar, con el mismo enlace puede modificar su input durante una semana. Se puede eliminar a quien
+        aún no responde; a quien ya respondió se lo excluye en la tabla de inputs.
       </p>
-      {link && <LinkBox invitation={link} onClose={() => setLink(null)} />}
+      {links.length > 0 && (
+        <div className="link-list">
+          {links.map((l) => (
+            <InvitationLink key={l.id} invitation={l} onClose={() => setLinks((prev) => prev.filter((x) => x.id !== l.id))} />
+          ))}
+        </div>
+      )}
       {!closed && (
         <form className="controls" onSubmit={invite} noValidate>
+          <input className="inline-input" placeholder="Nombre (opcional)" value={nombre} onChange={(e) => setNombre(e.target.value)} aria-label="Nombre del experto" maxLength={200} />
           <input type="email" className="inline-input" placeholder="correo@experto.cl" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Correo del experto" />
           <button type="submit" className="primary" disabled={busy || !email.trim()}>{busy ? 'Invitando…' : 'Invitar'}</button>
-          <span className="status err small">{msg}</span>
+          {pending.length > 0 && (
+            <button type="button" disabled={busy} onClick={resendPending}>Reenviar a quienes no han respondido ({pending.length})</button>
+          )}
         </form>
       )}
+      {msg && <p className="status err small">{msg}</p>}
       <div style={{ overflow: 'auto' }}>
         <table>
-          <thead><tr><th>Correo</th><th>Estado</th><th>Creada</th><th>Vence</th><th>Envío</th><th /></tr></thead>
+          <thead><tr><th>Experto</th><th>Estado</th><th>Creada</th><th>Vence</th><th>Envío</th><th /></tr></thead>
           <tbody>
             {items === null && <tr><td colSpan="6" className="empty">Cargando…</td></tr>}
             {items !== null && items.length === 0 && <tr><td colSpan="6" className="empty">Sin invitaciones</td></tr>}
             {(items || []).map((inv) => (
               <tr key={inv.id}>
-                <td>{inv.email}</td>
-                <td><span className={`badge inv-${inv.estado}`}>{inv.estado}</span></td>
+                <td>{inv.nombre ? <>{inv.nombre} <span className="small muted">{inv.email}</span></> : inv.email}</td>
+                <td><span className={`badge inv-${inv.estado}`}>{inv.estado === 'usada' ? 'respondida' : inv.estado}</span></td>
                 <td className="small">{fmtDate(inv.created_at)}</td>
                 <td className="small">{inv.estado === 'usada' ? '—' : fmtDate(inv.expira_at)}</td>
                 <td className="small" title={inv.envio_error || undefined}>
@@ -191,7 +212,8 @@ function Invitations({ project, onChanged, refreshKey }) {
                 </td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   {inv.estado === 'pendiente' && <button type="button" className="btn" onClick={() => action(inv, 'revoke')}>Revocar</button>}{' '}
-                  {inv.estado !== 'usada' && !closed && <button type="button" className="btn" onClick={() => action(inv, 'regenerate')}>Regenerar</button>}
+                  {inv.estado !== 'usada' && !closed && <button type="button" className="btn" onClick={() => action(inv, 'regenerate')}>Regenerar</button>}{' '}
+                  {inv.estado !== 'usada' && <button type="button" className="btn" onClick={() => remove(inv)}>Eliminar</button>}
                 </td>
               </tr>
             ))}
@@ -211,7 +233,8 @@ function ComputationList({ calculos }) {
       {calculos.map((c) => (
         <Link key={c.job_id} to={`/fe/jobs/${c.job_id}`} className="small">
           <span className={`badge ${jobBadge(c.status)}`}>{c.status}</span>{' '}
-          THR {c.thr ?? '—'} · orden {c.maxorder ?? '—'} · job <span className="mono">{c.job_id}</span>
+          THR {c.thr ?? '—'} · orden {c.maxorder ?? '—'} · v{c.input_version} · job <span className="mono">{c.job_id}</span>
+          {c.desactualizado && <>{' '}<span className="badge outdated" title="El experto modificó su input después de este cálculo">input modificado</span></>}
         </Link>
       ))}
     </div>
@@ -397,7 +420,7 @@ function Inputs({ project, onChanged, onNewInputs }) {
         Los inputs se guardan al recibirse; los cálculos se lanzan desde aquí con el THR y el orden máximo que elijas,
         y un mismo input puede tener varios cálculos. Un input excluido se conserva, pero no entra en los análisis conjuntos.
       </p>
-      {all.length > 0 && <ComputeForm project={project} selected={all.filter((i) => sel.has(i.id)).map((i) => i.id)} names={Object.fromEntries(all.map((i) => [i.id, i.email]))} onDone={() => { setPollKey((k) => k + 1); onChanged(); }} />}
+      {all.length > 0 && <ComputeForm project={project} selected={all.filter((i) => sel.has(i.id)).map((i) => i.id)} names={Object.fromEntries(all.map((i) => [i.id, i.nombre || i.email]))} onDone={() => { setPollKey((k) => k + 1); onChanged(); }} />}
       {msg && <p className="status err small">{msg}</p>}
       <div style={{ overflow: 'auto' }}>
         <table>
@@ -423,8 +446,12 @@ function Inputs({ project, onChanged, onNewInputs }) {
                 <td>
                   <input type="checkbox" checked={sel.has(item.id)} onChange={() => toggleSelected(item.id)} aria-label={`Elegir ${item.email || item.id}`} />
                 </td>
-                <td>{item.email || `invitación ${item.invitation_id}`}</td>
-                <td className="small">{fmtDate(item.created_at)}</td>
+                <td>{item.email ? expertName(item) : `invitación ${item.invitation_id}`}</td>
+                <td className="small">
+                  {fmtDate(item.created_at)}
+                  {item.version > 1 && <div className="muted">v{item.version} · modificado {fmtDate(item.updated_at)}</div>}
+                  {item.editable && <div className="muted">editable hasta {fmtDate(item.editable_hasta)}</div>}
+                </td>
                 <td><ComputationList calculos={item.calculos} /></td>
                 <td>
                   <input type="checkbox" checked={item.excluido} onChange={() => toggleExcluded(item)} aria-label="Excluir de los análisis conjuntos" />
@@ -434,6 +461,75 @@ function Inputs({ project, onChanged, onNewInputs }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// --- administradores del proyecto (RF-49) ------------------------------------------------------
+
+function personLabel(p) {
+  return `${p.nombre || p.email}${p.nombre ? ` <${p.email}>` : ''}${p.activo ? '' : ' (desactivado)'}`;
+}
+
+function ProjectAdmins({ project, me, onChanged }) {
+  const [directory, setDirectory] = useState([]);
+  const [choice, setChoice] = useState('');
+  const [msg, setMsg] = useState('');
+  const manage = project.puede_gestionar;
+
+  useEffect(() => {
+    if (!manage) return;
+    send('/app/users/directory', 'GET').then(({ ok, data }) => ok && setDirectory(data)).catch(() => {});
+  }, [manage]);
+
+  async function call(path, method, body, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    const { ok, data } = await send(path, method, body).catch(() => ({ ok: false, data: {} }));
+    if (!ok) {
+      setMsg(errorText(data, 'No se pudo actualizar'));
+      return;
+    }
+    setMsg('');
+    setChoice('');
+    onChanged(data);
+  }
+
+  const members = new Set([project.owner?.id, ...project.admins.map((a) => a.id)]);
+  const candidates = directory.filter((u) => !members.has(u.id));
+  const base = `/app/projects/${project.id}`;
+
+  return (
+    <div className="card">
+      <h2>Administradores</h2>
+      <p className="sub">El dueño y los co-admins gestionan el proyecto. Solo el dueño (o el superadmin) agrega o quita co-admins y puede borrarlo.</p>
+      <div className="people">
+        <div className="people-row">
+          <span className="badge estado-abierto">dueño</span>
+          <span>{project.owner ? personLabel(project.owner) : '—'}</span>
+        </div>
+        {project.admins.map((a) => (
+          <div key={a.id} className="people-row">
+            <span className="badge estado-borrador">co-admin</span>
+            <span>{personLabel(a)}</span>
+            {manage && <button type="button" className="btn" onClick={() => call(`${base}/admins/${a.id}`, 'DELETE', null, `¿Quitar a ${a.email} del proyecto?`)}>Quitar</button>}
+            {manage && a.activo && <button type="button" className="btn" onClick={() => call(`${base}/owner`, 'POST', { user_id: a.id }, `¿Transferir la propiedad a ${a.email}? Quedarás como co-admin.`)}>Hacer dueño</button>}
+            {!manage && me && a.id === me.id && (
+              <button type="button" className="btn" onClick={() => call(`${base}/admins/${a.id}`, 'DELETE', null, '¿Salir del proyecto? Dejarás de verlo.')}>Salir del proyecto</button>
+            )}
+          </div>
+        ))}
+      </div>
+      {manage && (
+        <div className="controls">
+          <select value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Admin a agregar">
+            <option value="">Agregar co-admin…</option>
+            {candidates.map((u) => <option key={u.id} value={u.id}>{u.nombre || u.email} ({u.email})</option>)}
+          </select>
+          <button type="button" className="primary" disabled={!choice} onClick={() => call(`${base}/admins`, 'POST', { user_id: Number(choice) })}>Agregar</button>
+          {candidates.length === 0 && <span className="small muted">No hay otros admins activos. Los crea el superadmin en Usuarios.</span>}
+        </div>
+      )}
+      {msg && <p className="status err small">{msg}</p>}
     </div>
   );
 }
@@ -503,6 +599,11 @@ export default function ProjectDetail() {
   const [msg, setMsg] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [inputsKey, setInputsKey] = useState(0); // sube al llegar inputs nuevos: recarga invitaciones
+  const [me, setMe] = useState(null);
+
+  useEffect(() => {
+    fetchMe().then(setMe).catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     const { ok, data } = await send(`/app/projects/${projectId}`, 'GET').catch(() => ({ ok: false, data: {} }));
@@ -560,7 +661,7 @@ export default function ProjectDetail() {
               </button>
             ))}
             {!editing && <button type="button" onClick={() => setEditing(true)}>Editar</button>}
-            {empty && <button type="button" onClick={remove}>Borrar</button>}
+            {empty && project.puede_gestionar && <button type="button" onClick={remove}>Borrar</button>}
           </div>
         </div>
         {msg && <p className="status err small">{msg}</p>}
@@ -584,6 +685,14 @@ export default function ProjectDetail() {
         )}
       </div>
 
+      <ProjectAdmins
+        project={project}
+        me={me}
+        onChanged={(p) => {
+          if (me && !p.puede_gestionar && p.owner?.id !== me.id && !p.admins.some((a) => a.id === me.id) && me.rol !== 'superadmin') navigate('/projects');
+          else setProject(p);
+        }}
+      />
       {expert && <Invitations project={project} onChanged={load} refreshKey={inputsKey} />}
       {expert && (
         <Inputs

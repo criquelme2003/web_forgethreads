@@ -10,6 +10,8 @@ import MaxMinResult from './pages/MaxMinResult.jsx';
 import Projects from './pages/Projects.jsx';
 import ProjectDetail from './pages/ProjectDetail.jsx';
 import ExpertInvite from './pages/ExpertInvite.jsx';
+import Activate from './pages/Activate.jsx';
+import Users from './pages/Users.jsx';
 
 export default function App() {
   return (
@@ -18,9 +20,12 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         {/* Pública: el experto entra con el token del enlace, sin sesión. */}
         <Route path="/invite/:token" element={<ExpertInvite />} />
+        {/* Pública: el admin nuevo elige su contraseña con el enlace de activación. */}
+        <Route path="/activate/:token" element={<Activate />} />
         <Route element={<Layout />}>
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:projectId" element={<ProjectDetail />} />
+          <Route path="/users" element={<Users />} />
           {/* MaxMin ahora se lanza dentro de un proyecto de simulación. */}
           <Route path="/parameters" element={<Navigate to="/projects" replace />} />
           <Route path="/execute_maxmin" element={<Navigate to="/projects" replace />} />

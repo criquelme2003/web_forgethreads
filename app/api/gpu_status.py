@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from app.api.deps import get_node_selector, get_ssh_pool, require_user
 from app.services.node_selector import NoAvailableNodeError, NodeSelector
+from app.services.user_store import User
 
 router = APIRouter(tags=["parameters"], prefix="/app")
 
@@ -38,7 +39,7 @@ class ClusterStatusResponse(BaseModel):
 
 @router.get("/gpu_status", response_model=GpuStatusResponse)
 async def gpu_status(
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
     prefer_idle: bool = True,
     gpu_idle_threshold: int | None = None,
@@ -82,7 +83,7 @@ async def gpu_status(
 
 @router.get("/cluster_status", response_model=ClusterStatusResponse)
 async def cluster_status(
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     selector: Annotated[NodeSelector, Depends(get_node_selector)],
     check_idle: bool = False,
     gpu_idle_threshold: int | None = None,
@@ -136,7 +137,7 @@ async def cluster_status(
 @router.get("/gpu_status/{node_name}", response_model=GpuStatusResponse)
 async def gpu_status_by_node(
     node_name: str,
-    user: Annotated[str, Depends(require_user)],
+    user: Annotated[User, Depends(require_user)],
     request: Request,
 ) -> GpuStatusResponse:
     """Debug: fuerza consulta a un nodo concreto (sin selector)."""

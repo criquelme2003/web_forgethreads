@@ -14,6 +14,8 @@ Los cambios del lado del cluster están detallados en [scripts_wf_requerimientos
 - Reporte del proyecto tipo blog y difusión de resultados por correo, también a los expertos si el admin los agrega: RF-56 a RF-60.
 - Pendientes: validar el flujo de invitación y los gráficos nuevos, límites de cálculo (consulta al profesor Ignacio) y el mecanismo de acceso al reporte (sección 9).
 
+**Implementado** (2026-10-19): roles, alta y desactivación de admins, co-admins y filtro por membresía (RF-01 a RF-05, RF-48, RF-49); invitaciones con nombre, edición del input con versiones, reenvío por lotes, eliminación y atribución (RF-10, RF-11, RF-19, RF-20, RF-50 a RF-54); RF-55. Queda pendiente el reporte (RF-56 a RF-60), que depende de D-01.
+
 ## Contexto
 
 La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálculos MaxMin sueltos en el cluster SLURM (`new_job.sh` + `notifier.sh` encadenado, callback a `/app/job_callback`). Los nuevos requerimientos introducen la entidad **proyecto**, con dos tipos:

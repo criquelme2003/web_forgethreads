@@ -55,7 +55,10 @@ def test_copies_legacy_sqlite(tmp_path: Path, database: str) -> None:
 
     copied = asyncio.run(copy_database(source, database))
 
-    assert copied == {"projects": 1, "jobs": 2, "expert_invitations": 1, "expert_inputs": 1}
+    assert copied == {
+        "users": 0, "projects": 1, "jobs": 2, "project_admins": 0, "expert_invitations": 1,
+        "expert_inputs": 1, "expert_input_versions": 1,
+    }
     assert source.read_bytes() == before  # el origen no se toca
 
     projects = ProjectStore(database)
@@ -66,6 +69,9 @@ def test_copies_legacy_sqlite(tmp_path: Path, database: str) -> None:
     assert invitation.state() == "usada"
     item = asyncio.run(projects.get_input(7, 5))
     assert item.cc == [[1, 0.5], [0.2, 1]] and item.excluido is True
+    # La migración deja el input anterior como versión 1, sin plazo de edición (RF-53).
+    assert item.version == 1 and not item.editable()
+    assert [v.version for v in asyncio.run(projects.list_input_versions(7, 5))] == [1]
 
     jobs = JobStore(database)
     fe = asyncio.run(jobs.get("100"))
@@ -75,7 +81,7 @@ def test_copies_legacy_sqlite(tmp_path: Path, database: str) -> None:
 
     # Los ids nuevos siguen después de los copiados.
     new = asyncio.run(
-        projects.create_project(nombre="Nuevo", descripcion="", tipo="simulacion", owner=None)
+        projects.create_project(nombre="Nuevo", descripcion="", tipo="simulacion", owner_id=None)
     )
     assert new.id > 7
     _, token = asyncio.run(projects.create_invitation(7, "f@x.cl", timedelta(days=1)))

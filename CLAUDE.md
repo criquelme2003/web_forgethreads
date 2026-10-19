@@ -18,14 +18,20 @@ uv run uvicorn app.main:app --reload            # servidor local
 
 ## Arquitectura
 
-- `app/api/` — routers FastAPI. Dependencias compartidas en `api/deps.py` (`require_user`, `get_job_store`, `get_ssh_pool`, `get_node_selector`); usarlas siempre en vez de instanciar servicios en el router.
+- `app/api/` — routers FastAPI. Dependencias compartidas en `api/deps.py` (`require_user`, `require_superadmin`, `get_job_store`, `get_project_store`, `get_user_store`, `get_ssh_pool`, `get_node_selector`); usarlas siempre en vez de instanciar servicios en el router.
 - `app/db/` — SQLAlchemy Core async: `schema.py` (tablas), `engine.py` (un motor por URL; aplica las migraciones de Alembic en `migrations/` la primera vez que se usa), `copy_sqlite.py` (copia una base SQLite antigua a PostgreSQL).
-- `app/services/` — lógica: `job_store` (jobs), `project_store` (proyectos, invitaciones e inputs; misma base), `mailer` (SMTP de invitaciones), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
+- `app/services/` — lógica: `job_store` (jobs), `project_store` (proyectos, co-admins, invitaciones e inputs con versiones; misma base), `user_store` (superadmin y admins, contraseñas con argon2), `mailer` (SMTP de invitaciones), `node_selector` (elige GPU libre, cache TTL), `slurm_submit` (arma comandos `sbatch`), `fe_input` / `fe_remote` (matrices de expertos y SFTP).
 - `app/ssh/` — pool asyncssh singleton, creado y cerrado en `app/lifespan.py`.
 - `app/repositories/slurm.py` — consultas de estado SLURM.
 - `app/core/config.py` — `Settings` (pydantic-settings, lee `.env`); `get_settings()` está cacheado. La base es `DATABASE_URL` (PostgreSQL en producción) o, si falta, SQLite en `JOBS_DB_PATH`.
 - Despliegue: `deployment.yaml` (app) y `postgres.yaml` (PostgreSQL con respaldo diario); pasos en [docs/despliegue.md](docs/despliegue.md).
 - `app/front/` — SPA Vite servida por FastAPI en `/front`.
+
+### Usuarios y acceso
+
+- Roles: **superadmin** (sale de `AUTH_USERNAME` / `AUTH_PASSWORD`; se crea o actualiza al iniciar y en cada ingreso, y recibe los proyectos sin dueño) y **admin** (lo crea el superadmin en `/front/users`). La sesión guarda `user_id`; `require_user` devuelve el `User` y corta el acceso si se desactivó.
+- Un admin nuevo no tiene contraseña: recibe un enlace de activación de un solo uso (`/front/activate/<token>`, solo se guarda el hash, vence en `ACTIVATION_TTL_HOURS`). Regenerarlo sirve para restablecer la contraseña.
+- Cada proyecto tiene dueño (`projects.owner_id`) y co-admins (`project_admins`). Un admin solo ve los proyectos de los que es miembro (404 en los ajenos) y los jobs de esos proyectos o los sueltos que lanzó él (`jobs.user_id`). Borrar el proyecto y gestionar co-admins es del dueño o del superadmin. Al desactivar un admin, sus proyectos pasan al co-admin más antiguo o a quien desactiva.
 
 ### Flujo de un job
 
@@ -47,8 +53,9 @@ uv run uvicorn app.main:app --reload            # servidor local
 
 - Tipos `expertos` (estados `borrador → abierto → cerrado`, reabrible) y `simulacion` (`abierto ↔ cerrado`). Las etiquetas solo se editan en `borrador`. El proyecto no tiene `thr` ni `maxorder`: se indican en cada lanzamiento.
 - Los cálculos de un proyecto son filas de `jobs` con `project_id` (e `input_id` si vienen de un experto). `POST /app/execute_maxmin` exige `project_id` de un proyecto de simulación abierto.
-- Invitaciones: token de un solo uso, solo se guarda su hash; el enlace (`/front/invite/<token>`) se muestra al crear o regenerar. Con `INVITATION_DELIVERY=smtp` además se envía por correo (puerto 465 = SSL implícito).
-- `/app/invite/{token}` es público (sin sesión): info, validación contra las etiquetas del proyecto y envío. El envío consume el token en la misma transacción que guarda el input (matrices normalizadas en `expert_inputs`); no lanza nada en el cluster.
+- Invitaciones (correo y nombre opcional del experto): solo se guarda el hash del token; el enlace (`/front/invite/<token>`) se muestra al crear, regenerar o reenviar por lotes (`/invitations/resend`, a quienes no han respondido; regenera cada token). Con `INVITATION_DELIVERY=smtp` además se envía por correo (puerto 465 = SSL implícito). Solo se elimina a un experto sin input; al resto se lo excluye.
+- `/app/invite/{token}` es público (sin sesión): info, validación contra las etiquetas del proyecto y envío. El primer envío consume la invitación y guarda el input (matrices normalizadas en `expert_inputs`); durante `INPUT_EDIT_DAYS` el mismo enlace sirve para modificarlo (modo `edicion`, con las matrices precargadas) y cada modificación es una versión en `expert_input_versions`. No lanza nada en el cluster.
+- Cada cálculo guarda la versión del input usada (`jobs.input_version`); si después hay una más nueva, se marca «input modificado». Los jobs de un input devuelven `experto` (nombre, correo, versiones).
 - `POST /app/projects/{id}/compute` (`thr`, `maxorder`, `nodo?`, `input_ids?`; por defecto los no excluidos) lanza un `fe_job.sh` por input. Los errores de lanzamiento se devuelven por input; reintentar es volver a lanzar.
 - Al abrir la base, los jobs MaxMin sin proyecto se mueven a un proyecto de simulación «MaxMin (jobs anteriores)».
 - Datos de muestra (`app/services/demo_seed.py`): «Demo · Expertos» (abierto, con un input de `docs/ejemplos_fe`) y «Demo · Simulación» (vacío). Se crean si faltan con `SEED_DEMO_DATA=true` al iniciar o con `uv run python -m app.services.demo_seed`.
@@ -62,7 +69,7 @@ El contrato con el cluster está en el README de [scripts_wf](https://github.com
 - Nunca loguear tokens: usar `redact_token`.
 - Los tests sobrescriben `get_settings` (ver `tests/conftest.py`) y no abren conexiones SSH reales. Usan el fixture `database` (nunca `data/jobs.db`) y `run_sql` en vez de `sqlite3`, para que corran también contra PostgreSQL.
 - Cambios de esquema solo con migraciones de Alembic; no crear tablas ni columnas desde los stores.
-- Endpoints nuevos bajo `/app/...`, protegidos con `Depends(require_user)` salvo el callback del cluster.
+- Endpoints nuevos bajo `/app/...`, protegidos con `Depends(require_user)` salvo el callback del cluster y los enlaces públicos con token (`/app/invite/...`, `/app/activate/...`). Todo recurso de un proyecto pasa por `get_project_or_404(project_id, store, user)` (`app/api/projects.py`), que aplica el filtro por membresía.
 
 ## Commits
 
