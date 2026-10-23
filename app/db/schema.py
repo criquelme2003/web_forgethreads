@@ -14,12 +14,31 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     false,
+    true,
 )
 
 from app.db.columns import JSONType, UTCDateTime
 
 metadata = MetaData()
+
+# Administradores (RF-01). `email` es el usuario de ingreso; el superadmin inicial usa AUTH_USERNAME.
+# Sin `password_hash` el admin aún no activa su cuenta (RF-48).
+users = Table(
+    "users",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("email", Text, nullable=False, unique=True),
+    Column("nombre", Text, nullable=False, server_default=""),
+    Column("rol", String(20), nullable=False),
+    Column("password_hash", Text),
+    Column("activo", Boolean, nullable=False, server_default=true()),
+    Column("activacion_token_hash", String(64), unique=True),
+    Column("activacion_expira_at", UTCDateTime),
+    Column("created_at", UTCDateTime, nullable=False),
+    Column("updated_at", UTCDateTime, nullable=False),
+)
 
 projects = Table(
     "projects",
@@ -29,7 +48,7 @@ projects = Table(
     Column("descripcion", Text, nullable=False, server_default=""),
     Column("tipo", String(20), nullable=False),
     Column("estado", String(20), nullable=False),
-    Column("owner", Text),
+    Column("owner_id", Integer, ForeignKey("users.id", name="fk_projects_owner_id_users"), index=True),
     Column("causas", JSONType),
     Column("efectos", JSONType),
     Column("created_at", UTCDateTime, nullable=False),
@@ -54,6 +73,17 @@ jobs = Table(
     Column("result", JSONType),
     Column("project_id", Integer, index=True),
     Column("input_id", Integer),
+    Column("input_version", Integer),
+    Column("user_id", Integer),  # quién lo lanzó
+)
+
+# Co-admins de un proyecto (RF-49); el dueño está en projects.owner_id.
+project_admins = Table(
+    "project_admins",
+    metadata,
+    Column("project_id", Integer, ForeignKey("projects.id"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+    Column("created_at", UTCDateTime, nullable=False),
 )
 
 expert_invitations = Table(
@@ -62,6 +92,7 @@ expert_invitations = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("project_id", Integer, ForeignKey("projects.id"), nullable=False, index=True),
     Column("email", Text, nullable=False),
+    Column("nombre", Text),
     Column("token_hash", String(64), nullable=False, unique=True),
     Column("expira_at", UTCDateTime, nullable=False),
     Column("usado_at", UTCDateTime),
@@ -84,4 +115,22 @@ expert_inputs = Table(
     Column("ee", JSONType, nullable=False),
     Column("excluido", Boolean, nullable=False, server_default=false()),
     Column("created_at", UTCDateTime, nullable=False),
+    # Versión vigente (cc/ce/ee de arriba) y hasta cuándo el experto la puede modificar (RF-52).
+    Column("version", Integer, nullable=False, server_default="1"),
+    Column("updated_at", UTCDateTime),
+    Column("editable_hasta", UTCDateTime),
+)
+
+# Todas las versiones de cada input, incluida la vigente (RF-53).
+expert_input_versions = Table(
+    "expert_input_versions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("input_id", Integer, ForeignKey("expert_inputs.id"), nullable=False, index=True),
+    Column("version", Integer, nullable=False),
+    Column("cc", JSONType, nullable=False),
+    Column("ce", JSONType, nullable=False),
+    Column("ee", JSONType, nullable=False),
+    Column("created_at", UTCDateTime, nullable=False),
+    UniqueConstraint("input_id", "version", name="uq_expert_input_versions_input_version"),
 )

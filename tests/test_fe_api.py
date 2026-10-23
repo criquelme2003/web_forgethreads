@@ -7,10 +7,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.fe as fe_api
-from app.api.deps import get_job_store, get_node_selector, get_ssh_pool
+from app.api.deps import (
+    get_job_store,
+    get_node_selector,
+    get_project_store,
+    get_ssh_pool,
+    get_user_store,
+)
 from app.core.config import Settings, get_settings
 from app.main import app
 from app.services.job_store import JobStore
+from app.services.project_store import ProjectStore
+from app.services.user_store import UserStore
 from tests.conftest import TEST_PASSWORD, TEST_USERNAME, sqlite_only
 from tests.test_fe_input import CC, CE, EE
 
@@ -85,6 +93,9 @@ def env(tmp_path: Path, database: str, monkeypatch):
     )
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_job_store] = lambda: store
+    projects, users = ProjectStore(store._database), UserStore(store._database)
+    app.dependency_overrides[get_project_store] = lambda: projects
+    app.dependency_overrides[get_user_store] = lambda: users
     app.dependency_overrides[get_ssh_pool] = lambda: pool
     app.dependency_overrides[get_node_selector] = lambda: FakeSelector()
     with TestClient(app) as client:

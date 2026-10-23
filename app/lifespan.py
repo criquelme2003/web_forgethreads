@@ -9,6 +9,7 @@ from app.repositories.slurm import SlurmRepository
 from app.services.demo_seed import seed_demo
 from app.services.node_selector import NodeSelector
 from app.services.project_store import project_store
+from app.services.user_store import user_store
 from app.ssh.connection import clear_singletons, get_pool_from_settings, set_singletons
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,16 @@ async def global_lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.error("No se pudo preparar la base de datos %s: %s", display_url(database), e)
 
-    if settings.seed_demo_data:
+    # Superadmin inicial desde AUTH_USERNAME / AUTH_PASSWORD (RF-02); también se asegura al ingresar.
+    superadmin = None
+    try:
+        superadmin = await user_store.ensure_superadmin(settings.auth_username, settings.auth_password)
+    except Exception as e:  # noqa: BLE001
+        logger.error("No se pudo crear el superadmin: %s", e)
+
+    if settings.seed_demo_data and superadmin is not None:
         try:
-            await seed_demo(project_store, owner=settings.auth_username)
+            await seed_demo(project_store, owner_id=superadmin.id)
         except Exception as e:  # noqa: BLE001  (los datos de muestra nunca impiden arrancar)
             logger.warning("No se pudieron crear los datos de muestra: %s", e)
 

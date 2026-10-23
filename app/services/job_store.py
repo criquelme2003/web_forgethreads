@@ -34,6 +34,8 @@ class JobRecord:
     result: dict | None = None  # resumen que reporta el notifier (ej. orders/rows_per_order de fe_job)
     project_id: int | None = None  # proyecto al que pertenece el cálculo (None: jobs sueltos)
     input_id: int | None = None  # input de experto que originó el cálculo (proyectos de expertos)
+    input_version: int | None = None  # versión del input usada (RF-53)
+    user_id: int | None = None  # admin que lanzó el cálculo
 
 
 def resolve_database(database: str | None) -> str:
@@ -76,6 +78,8 @@ class JobStore:
             result=m["result"],
             project_id=m["project_id"],
             input_id=m["input_id"],
+            input_version=m["input_version"],
+            user_id=m["user_id"],
         )
 
     @staticmethod
@@ -95,6 +99,8 @@ class JobStore:
             "result": record.result,
             "project_id": record.project_id,
             "input_id": record.input_id,
+            "input_version": record.input_version,
+            "user_id": record.user_id,
         }
 
     async def _replace(self, record: JobRecord) -> None:
@@ -112,6 +118,8 @@ class JobStore:
         params: dict | None = None,
         project_id: int | None = None,
         input_id: int | None = None,
+        input_version: int | None = None,
+        user_id: int | None = None,
     ) -> JobRecord:
         """Crea el registro del job con un token propio (usado como --auth-token del notifier)."""
         now = datetime.now(UTC)
@@ -119,6 +127,7 @@ class JobStore:
         record = JobRecord(
             job_id=job_id, status="pending", node=node, created_at=now, updated_at=now, token=token,
             kind=kind, params=params, project_id=project_id, input_id=input_id,
+            input_version=input_version, user_id=user_id,
         )
         await self._replace(record)
         return record
@@ -151,6 +160,8 @@ class JobStore:
                 record.params = old.params
                 record.project_id = old.project_id
                 record.input_id = old.input_id
+                record.input_version = old.input_version
+                record.user_id = old.user_id
             await conn.execute(delete(jobs).where(jobs.c.job_id == job_id))
             await conn.execute(insert(jobs).values(**self._record_values(record)))
         return record

@@ -12,13 +12,20 @@ from sqlalchemy import select, update
 
 import app.api.fe as fe_api
 import app.api.projects as projects_api
-from app.api.deps import get_job_store, get_node_selector, get_project_store, get_ssh_pool
+from app.api.deps import (
+    get_job_store,
+    get_node_selector,
+    get_project_store,
+    get_ssh_pool,
+    get_user_store,
+)
 from app.core.config import Settings, get_settings
-from app.db.schema import expert_invitations
+from app.db.schema import expert_inputs, expert_invitations
 from app.main import app
 from app.services.job_store import JobStore
 from app.services.mailer import MailError
 from app.services.project_store import MIGRATED_PROJECT_NAME, ProjectStore, hash_token
+from app.services.user_store import UserStore
 from tests.conftest import TEST_PASSWORD, TEST_USERNAME, run_sql
 from tests.test_fe_input import CC, CE, EE
 
@@ -107,13 +114,15 @@ def env(tmp_path: Path, database: str, monkeypatch):
     app.dependency_overrides[get_settings] = lambda: state["settings"]
     app.dependency_overrides[get_job_store] = lambda: store
     app.dependency_overrides[get_project_store] = lambda: projects
+    users = UserStore(db)
+    app.dependency_overrides[get_user_store] = lambda: users
     app.dependency_overrides[get_ssh_pool] = lambda: pool
     app.dependency_overrides[get_node_selector] = lambda: FakeSelector()
     with TestClient(app) as client:
         res = client.post("/auth/login", json={"username": TEST_USERNAME, "password": TEST_PASSWORD})
         assert res.status_code == 200
         yield {
-            "client": client, "pool": pool, "store": store, "projects": projects, "db": db,
+            "client": client, "pool": pool, "store": store, "projects": projects, "users": users, "db": db,
             "uploads": uploads, "mails": mails, "state": state, "tmp_path": tmp_path,
         }
     app.dependency_overrides.clear()
@@ -165,6 +174,12 @@ def _anon(client: TestClient) -> TestClient:
         ("get", "/app/projects/1/inputs"),
         ("patch", "/app/projects/1/inputs/1"),
         ("post", "/app/projects/1/compute"),
+        ("post", "/app/projects/1/admins"),
+        ("delete", "/app/projects/1/admins/2"),
+        ("post", "/app/projects/1/owner"),
+        ("post", "/app/projects/1/invitations/resend"),
+        ("delete", "/app/projects/1/invitations/1"),
+        ("get", "/app/projects/1/inputs/1/versions"),
     ],
 )
 def test_project_routes_require_auth(client: TestClient, method: str, path: str) -> None:
@@ -180,7 +195,8 @@ def test_create_and_list_projects(env) -> None:
     sim = _create(client, nombre="Barridos", tipo="simulacion", causas=None, efectos=None)
 
     assert expert["estado"] == "borrador" and expert["transiciones"] == ["abierto"]
-    assert expert["owner"] == TEST_USERNAME
+    assert expert["owner"]["email"] == TEST_USERNAME and expert["admins"] == []
+    assert expert["puede_gestionar"] is True
     assert sim["estado"] == "abierto" and sim["causas"] == [] and "thr" not in sim
 
     listed = client.get("/app/projects").json()
@@ -383,8 +399,9 @@ def test_expert_submission_only_stores_input(env) -> None:
     cc = "x,b,a\nb,1,0.3\na,0.2,1\n"
     res = _submit(_anon(client), token, cc=cc)
     assert res.status_code == 200, res.text
-    assert res.json() == {"received": True}  # el experto no ve resultados
-    assert _submit(client, token).status_code == 410  # token de un solo uso
+    body = res.json()
+    assert body["received"] is True and body["version"] == 1  # el experto no ve resultados
+    assert set(body) == {"received", "version", "editable_hasta"}
     # El envío no lanza nada en el cluster: los cálculos los lanza el admin.
     assert env["pool"].commands == [] and env["uploads"] == []
 
@@ -394,6 +411,7 @@ def test_expert_submission_only_stores_input(env) -> None:
     item = inputs[0]
     assert item["email"] == "experta@example.com" and item["invitation_id"] == inv["id"]
     assert item["excluido"] is False and item["calculos"] == []
+    assert item["version"] == 1 and item["editable"] is True
     assert client.get(f"/app/projects/{pid}/invitations").json()[0]["estado"] == "usada"
     stored = asyncio.run(env["projects"].get_input(pid, item["id"]))
     assert stored.cc == [[1.0, pytest.approx(0.2)], [pytest.approx(0.3), 1.0]]
@@ -538,3 +556,138 @@ def test_old_maxmin_jobs_are_migrated(database: str) -> None:
     assert asyncio.run(store.get("2")).project_id is None
     # Idempotente: una segunda instancia no crea otro proyecto.
     assert len(asyncio.run(ProjectStore(db).list_projects())) == 1
+
+
+# --- edición del input después del envío (RF-52, RF-53) ---------------------------------------
+
+CC_V2 = "x,a,b\na,1,0.9\nb,0.8,1\n"
+
+
+def test_expert_edits_input_within_window(env) -> None:
+    client = env["client"]
+    pid = _open_project(client)["id"]
+    _, token = _invite(client, pid)
+    anon = _anon(client)
+    assert _submit(anon, token).status_code == 200
+
+    # El mismo enlace pasa a modo edición, con las matrices enviadas para precargarlas.
+    info = anon.get(f"/app/invite/{token}").json()
+    assert info["modo"] == "edicion" and info["version"] == 1 and info["plazo_edicion_dias"] == 7
+    assert info["actual"]["cc"][0][1] == pytest.approx(0.2)
+
+    res = _submit(anon, token, cc=CC_V2)
+    assert res.status_code == 200 and res.json()["version"] == 2
+
+    _login(client)
+    item = client.get(f"/app/projects/{pid}/inputs").json()[0]
+    assert item["version"] == 2
+    stored = asyncio.run(env["projects"].get_input(pid, item["id"]))
+    assert stored.cc[0][1] == pytest.approx(0.9)
+    versions = client.get(f"/app/projects/{pid}/inputs/{item['id']}/versions").json()
+    assert [v["version"] for v in versions] == [2, 1]
+
+
+def test_edit_window_expires_and_closing_suspends(env) -> None:
+    client = env["client"]
+    pid = _open_project(client)["id"]
+    _, token = _invite(client, pid)
+    assert _submit(_anon(client), token).status_code == 200
+
+    _login(client)
+    client.post(f"/app/projects/{pid}/estado", json={"estado": "cerrado"})
+    assert _anon(client).get(f"/app/invite/{token}").status_code == 409
+    _login(client)
+    client.post(f"/app/projects/{pid}/estado", json={"estado": "abierto"})
+    assert _anon(client).get(f"/app/invite/{token}").status_code == 200
+
+    past = datetime.now(UTC) - timedelta(seconds=1)
+    run_sql(env["db"], update(expert_inputs).values(editable_hasta=past))
+    res = _anon(client).get(f"/app/invite/{token}")
+    assert res.status_code == 410 and "plazo" in res.json()["detail"]
+    assert _submit(_anon(client), token).status_code == 410
+
+
+def test_computation_marked_outdated_after_edit(env) -> None:
+    client = env["client"]
+    pid = _open_project(client)["id"]
+    _, token = _invite(client, pid, "edita@example.com")
+    _submit(_anon(client), token)
+    _login(client)
+    assert _compute(client, pid).json()["errores"] == []
+    item = client.get(f"/app/projects/{pid}/inputs").json()[0]
+    assert item["calculos"][0]["input_version"] == 1 and item["calculos"][0]["desactualizado"] is False
+
+    _submit(_anon(client), token, cc=CC_V2)
+    _login(client)
+    item = client.get(f"/app/projects/{pid}/inputs").json()[0]
+    assert item["calculos"][0]["desactualizado"] is True
+
+    # Un cálculo nuevo usa la versión vigente.
+    job_id = _compute(client, pid).json()["lanzados"][0]["job_id"]
+    job = client.get(f"/app/jobs/{job_id}").json()
+    assert job["experto"]["email"] == "edita@example.com"
+    assert job["experto"]["input_version"] == 2 and job["experto"]["version_vigente"] == 2
+
+
+# --- reenvío por lotes y eliminación de expertos (RF-50, RF-51) -------------------------------
+
+
+def test_resend_to_pending_regenerates_links(env) -> None:
+    client = env["client"]
+    env["state"]["settings"] = _settings(
+        env["tmp_path"], invitation_delivery="smtp", smtp_host="smtp.example.com"
+    )
+    pid = _open_project(client)["id"]
+    _, answered = _invite(client, pid, "respondio@example.com")
+    pending, old_token = _invite(client, pid, "pendiente@example.com")
+    revoked, _ = _invite(client, pid, "revocada@example.com")
+    client.post(f"/app/projects/{pid}/invitations/{revoked['id']}/revoke")
+    expired, _ = _invite(client, pid, "expirada@example.com")
+    past = datetime.now(UTC) - timedelta(seconds=1)
+    run_sql(env["db"], update(expert_invitations).where(expert_invitations.c.id == expired["id"]).values(expira_at=past))
+    assert _submit(_anon(client), answered).status_code == 200
+    _login(client)
+    env["mails"].clear()
+
+    res = client.post(f"/app/projects/{pid}/invitations/resend", json={})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert sorted(i["email"] for i in body["reenviadas"]) == ["expirada@example.com", "pendiente@example.com"]
+    assert all(i["estado"] == "pendiente" and i["enviado_at"] for i in body["reenviadas"])
+    assert sorted(m["To"] for m in env["mails"]) == ["expirada@example.com", "pendiente@example.com"]
+    assert client.get(f"/app/invite/{old_token}").status_code == 404  # el enlace anterior ya no sirve
+
+    # Con ids explícitos se informan las omitidas.
+    res = client.post(
+        f"/app/projects/{pid}/invitations/resend", json={"invitation_ids": [pending["id"], revoked["id"], 999]}
+    ).json()
+    assert [i["id"] for i in res["reenviadas"]] == [pending["id"]]
+    assert {o["invitation_id"] for o in res["omitidas"]} == {revoked["id"], 999}
+
+
+def test_delete_expert_only_without_input(env) -> None:
+    client = env["client"]
+    pid = _open_project(client)["id"]
+    inv, token = _invite(client, pid, "sin-respuesta@example.com")
+    answered, answered_token = _invite(client, pid, "con-input@example.com")
+    _submit(_anon(client), answered_token)
+    _login(client)
+
+    assert client.delete(f"/app/projects/{pid}/invitations/{inv['id']}").status_code == 204
+    assert client.get(f"/app/invite/{token}").status_code == 404
+    res = client.delete(f"/app/projects/{pid}/invitations/{answered['id']}")
+    assert res.status_code == 409 and "exclúyelo" in res.json()["detail"]
+    assert client.delete(f"/app/projects/{pid}/invitations/999").status_code == 404
+    assert [i["email"] for i in client.get(f"/app/projects/{pid}/invitations").json()] == ["con-input@example.com"]
+
+
+def test_invitation_name_identifies_expert(env) -> None:
+    client = env["client"]
+    pid = _open_project(client)["id"]
+    res = client.post(f"/app/projects/{pid}/invitations", json={"email": "ana@example.com", "nombre": " Ana Pérez "})
+    assert res.status_code == 201 and res.json()["nombre"] == "Ana Pérez"
+    token = res.json()["link"].rsplit("/", 1)[1]
+    assert _anon(client).get(f"/app/invite/{token}").json()["nombre"] == "Ana Pérez"
+    _submit(_anon(client), token)
+    _login(client)
+    assert client.get(f"/app/projects/{pid}/inputs").json()[0]["nombre"] == "Ana Pérez"

@@ -6,7 +6,7 @@ Crea, si no existen (se reconocen por el nombre):
   lanzan desde la app, como con cualquier input.
 - «Demo · Simulación»: proyecto de simulación abierto, sin cálculos.
 
-Se puede correr a mano (`uv run python -m app.services.demo_seed`) o al iniciar la app con
+Quedan a nombre del superadmin. Se puede correr a mano (`uv run python -m app.services.demo_seed`) o al iniciar la app con
 SEED_DEMO_DATA=true; en ambos casos es idempotente.
 """
 
@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from app.services.fe_input import load_fe_input
 from app.services.project_store import ProjectStore
+from app.services.user_store import UserStore
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ Clima laboral,0.7,0.2,1
 """
 
 
-async def seed_demo(projects: ProjectStore, owner: str | None = None) -> list[str]:
+async def seed_demo(projects: ProjectStore, owner_id: int | None = None) -> list[str]:
     """Crea los proyectos de muestra que falten. Devuelve los nombres de los que creó."""
     existing = {p.nombre for p in await projects.list_projects()}
     created: list[str] = []
@@ -58,7 +59,7 @@ async def seed_demo(projects: ProjectStore, owner: str | None = None) -> list[st
             nombre=DEMO_EXPERT_PROJECT,
             descripcion="Proyecto de muestra con un input ya ingresado (matrices de docs/ejemplos_fe).",
             tipo="expertos",
-            owner=owner,
+            owner_id=owner_id,
             causas=DEMO_CAUSES,
             efectos=DEMO_EFFECTS,
         )
@@ -72,7 +73,7 @@ async def seed_demo(projects: ProjectStore, owner: str | None = None) -> list[st
             nombre=DEMO_SIMULATION_PROJECT,
             descripcion="Proyecto de muestra para lanzar cálculos MaxMin.",
             tipo="simulacion",
-            owner=owner,
+            owner_id=owner_id,
         )
         created.append(DEMO_SIMULATION_PROJECT)
 
@@ -85,7 +86,13 @@ def main() -> None:
     from app.core.config import get_settings
 
     settings = get_settings()
-    created = asyncio.run(seed_demo(ProjectStore(settings.effective_database_url), settings.auth_username))
+
+    async def run() -> list[str]:
+        database = settings.effective_database_url
+        owner = await UserStore(database).ensure_superadmin(settings.auth_username, settings.auth_password)
+        return await seed_demo(ProjectStore(database), owner.id)
+
+    created = asyncio.run(run())
     print(f"Creados: {', '.join(created)}" if created else "Los proyectos de muestra ya existían.")
 
 

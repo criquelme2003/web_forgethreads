@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     # --- Invitaciones a expertos ---
     invitation_ttl_days: int = 14  # vigencia del enlace de invitación (RF-10)
+    input_edit_days: int = 7  # plazo para que el experto modifique su input tras enviarlo (RF-52)
+    activation_ttl_hours: int = 72  # vigencia del enlace de activación de un admin (RF-48)
     # "manual": el admin copia el enlace y lo envía; "smtp": además se envía por correo (RF-12)
     invitation_delivery: str = "manual"
     smtp_host: str | None = None

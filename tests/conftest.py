@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, text
 
-from app.api.deps import get_job_store, get_project_store
+from app.api.deps import get_job_store, get_project_store, get_user_store
 from app.core.config import Settings, get_settings
 from app.db import engine as db_engine
 from app.db.engine import get_engine
@@ -19,6 +19,7 @@ from app.db.schema import metadata
 from app.main import app
 from app.services.job_store import JobStore
 from app.services.project_store import ProjectStore
+from app.services.user_store import UserStore
 
 TEST_USERNAME = "testadmin"
 TEST_PASSWORD = "testpass"
@@ -110,6 +111,8 @@ def client(database) -> TestClient:
     app.dependency_overrides[get_job_store] = lambda: store
     projects = ProjectStore(database)
     app.dependency_overrides[get_project_store] = lambda: projects
+    users = UserStore(database)
+    app.dependency_overrides[get_user_store] = lambda: users
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

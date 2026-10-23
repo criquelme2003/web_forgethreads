@@ -88,9 +88,11 @@ function Preview({ name, preview, errors }) {
  * - `validation` / `onValidation` la controla el padre, que también la actualiza si el envío
  *   final devuelve errores.
  * - `onTexts(texts | null)` informa los CSV listos para enviar (null si falta alguno).
+ * - `initial` ({cc, ce, ee}, opcional): matrices ya enviadas; se parte en el ingreso manual con
+ *   esos valores para modificarlos.
  */
-export default function MatricesInput({ validate, labels, validation, onValidation, onTexts, onMessage }) {
-  const [mode, setMode] = useState('csv'); // 'csv' | 'manual'
+export default function MatricesInput({ validate, labels, validation, onValidation, onTexts, onMessage, initial }) {
+  const [mode, setMode] = useState(initial ? 'manual' : 'csv'); // 'csv' | 'manual'
   const [texts, setTexts] = useState({ cc: null, ce: null, ee: null });
   const [manualTexts, setManualTexts] = useState(null);
   const [fileNames, setFileNames] = useState({});
@@ -152,7 +154,7 @@ export default function MatricesInput({ validate, labels, validation, onValidati
         <button type="button" role="tab" aria-selected={mode === 'manual'} className={mode === 'manual' ? 'primary' : undefined} onClick={() => setMode('manual')}>Ingresar a mano</button>
       </div>
 
-      {mode === 'manual' && <ManualMatrices onChange={setManualTexts} errors={validation?.errors} fixedLabels={labels} />}
+      {mode === 'manual' && <ManualMatrices onChange={setManualTexts} errors={validation?.errors} fixedLabels={labels} initial={initial} />}
 
       {mode === 'csv' && (
         <div className="grid-3">

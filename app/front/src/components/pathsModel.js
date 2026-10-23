@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Modelo común de los caminos (efectos olvidados) para el chord y el hive plot.
+ * Modelo común de los caminos (efectos olvidados) para el hive plot.
  *
  * Color por orden: rampa ordinal de un solo tono (azul claro → oscuro, más indirecto = más
  * oscuro), validada con el validador de la guía de visualización (--ordinal, superficie clara).

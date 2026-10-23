@@ -158,12 +158,8 @@ tr.row-muted td{color:var(--muted)}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 details.card>summary{cursor:pointer;list-style:revert}
 
-/* chord y hive plot de caminos: nodos neutros, cintas/caminos por orden (rampa ordinal azul validada) */
+/* hive plot de caminos: nodos neutros, caminos por orden (rampa ordinal azul validada) */
 .paths-viz{position:relative;width:100%;margin-top:4px}
-.pv-ribbon{transition:fill-opacity .12s}
-.pv-arc{fill:#4b5563}
-.pv-arc.effect{fill:#9ca3af}
-.pv-arc.is-active{fill:var(--text)}
 .pv-axis{stroke:#d1d5db;stroke-width:1}
 .pv-axis-title{font-size:11px;letter-spacing:.05em;text-transform:uppercase;fill:var(--muted)}
 .pv-dot{fill:#4b5563;stroke:#fff;stroke-width:2}
@@ -172,7 +168,7 @@ details.card>summary{cursor:pointer;list-style:revert}
 .pv-label.is-active{font-weight:700}
 .pv-node{outline:none}
 .pv-node.is-clickable{cursor:pointer}
-.pv-node:focus-visible .pv-arc,.pv-node:focus-visible .pv-dot{stroke:var(--text);stroke-width:1.5px}
+.pv-node:focus-visible .pv-dot{stroke:var(--text);stroke-width:1.5px}
 .sankey-node.is-clickable{cursor:pointer}
 .order-legend{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 .legend-chip{display:inline-flex;gap:6px;align-items:center;padding:3px 8px;border:1px solid var(--border);border-radius:999px;background:#fff;font-size:12px;color:var(--text);cursor:pointer}
@@ -180,6 +176,17 @@ details.card>summary{cursor:pointer;list-style:revert}
 /* En los nodos que filtran por origen, la etiqueta también recibe el clic (queda sobre los enlaces). */
 .sankey-node.is-clickable .sankey-label,.pv-node.is-clickable .pv-label{pointer-events:auto;cursor:pointer}
 .pv-dot.effect{fill:#9ca3af}
-.pv-arc.other,.pv-dot.other{fill:#d1d5db}
+.pv-dot.other{fill:#d1d5db}
 .pv-kind-legend{display:inline-flex;gap:12px;align-items:center}
 .pv-kind-legend span{display:inline-flex;gap:5px;align-items:center}
+
+/* sesión, usuarios y admins del proyecto */
+.topbar-inner{gap:16px;flex-wrap:wrap}
+.session{display:flex;gap:10px;align-items:center;color:var(--muted)}
+.badge.user-activo{background:#d1fae5;color:var(--ok);border:1px solid #6ee7b7}
+.badge.user-pendiente{background:#fef3c7;color:var(--warn);border:1px solid #fcd34d}
+.badge.user-inactivo{background:#f3f4f6;color:var(--muted);border:1px solid #d1d5db}
+.badge.outdated{background:#fef3c7;color:var(--warn);border:1px solid #fcd34d}
+.people{display:flex;flex-direction:column;gap:6px;margin:8px 0 12px}
+.people-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.link-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
