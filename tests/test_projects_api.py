@@ -180,6 +180,8 @@ def _anon(client: TestClient) -> TestClient:
         ("post", "/app/projects/1/invitations/resend"),
         ("delete", "/app/projects/1/invitations/1"),
         ("get", "/app/projects/1/inputs/1/versions"),
+        ("post", "/app/projects/1/aggregate"),
+        ("get", "/app/projects/1/compare"),
     ],
 )
 def test_project_routes_require_auth(client: TestClient, method: str, path: str) -> None:
@@ -691,3 +693,137 @@ def test_invitation_name_identifies_expert(env) -> None:
     _submit(_anon(client), token)
     _login(client)
     assert client.get(f"/app/projects/{pid}/inputs").json()[0]["nombre"] == "Ana Pérez"
+
+
+# --- análisis conjunto (RF-24 a RF-26) --------------------------------------------------------
+
+
+def _aggregate(client: TestClient, pid: int, **overrides):
+    return client.post(
+        f"/app/projects/{pid}/aggregate", json={"thr": 0.5, "maxorder": 3, "reps": 200, **overrides}
+    )
+
+
+def _finish(env, job_id: str, orders: list[int]) -> None:
+    """Simula el callback de éxito de un fe_job."""
+    token = asyncio.run(env["store"].get(job_id)).token
+    payload = {
+        "job_id": job_id, "status": "success", "logs": "", "kind": "fe", "orders": orders,
+        "rows_per_order": {str(o): 1 for o in orders},
+    }
+    res = env["client"].post("/app/job_callback", json=payload, headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200, res.text
+
+
+def test_aggregate_stacks_non_excluded_inputs(env) -> None:
+    client = env["client"]
+    pid, (id3, id2, id1) = _project_with_inputs(env, 3)
+    client.patch(f"/app/projects/{pid}/inputs/{id3}", json={"excluido": True})
+
+    res = _aggregate(client, pid, thr=0.4, maxorder=4, reps=500)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert sorted(body["input_ids"]) == sorted([id1, id2])
+
+    files = env["uploads"][-1]["files"]
+    assert np.load(io.BytesIO(files["CC.npy"])).shape == (2, 2, 2)
+    assert np.load(io.BytesIO(files["CE.npy"])).shape == (2, 2, 3)
+    assert np.load(io.BytesIO(files["EE.npy"])).shape == (2, 3, 3)
+    meta = json.loads(files["meta.json"])
+    assert meta["reps"] == 500 and meta["thr"] == 0.4 and meta["maxorder"] == 4
+
+    job = client.get(f"/app/jobs/{body['job_id']}").json()
+    assert job["kind"] == "fe" and job["input_id"] is None and job["experto"] is None
+    assert sorted(e["input_id"] for e in job["expertos"]) == sorted([id1, id2])
+    assert {e["email"] for e in job["expertos"]} == {"experto0@example.com", "experto1@example.com"}
+    assert all(e["input_version"] == 1 for e in job["expertos"])
+    # El agregado no aparece entre los cálculos por experto de la tabla de inputs.
+    assert all(not i["calculos"] for i in client.get(f"/app/projects/{pid}/inputs").json())
+
+    # Inputs elegidos explícitamente, aunque estén excluidos.
+    res = _aggregate(client, pid, input_ids=[id3, id1])
+    assert res.status_code == 200 and res.json()["input_ids"] == [id3, id1]
+
+
+def test_aggregate_validation(env) -> None:
+    client = env["client"]
+    pid, (id2, id1) = _project_with_inputs(env, 2)
+
+    assert _aggregate(client, pid, input_ids=[id1]).status_code == 400  # k < 2
+    assert _aggregate(client, pid, input_ids=[id1, 999]).status_code == 404
+    assert _aggregate(client, pid, reps=0).status_code == 422
+    assert _aggregate(client, pid, thr=2).status_code == 422
+    client.patch(f"/app/projects/{pid}/inputs/{id2}", json={"excluido": True})
+    assert _aggregate(client, pid).status_code == 400  # un solo input no excluido
+    sim = _create(client, tipo="simulacion")
+    assert _aggregate(client, sim["id"]).status_code == 400
+    assert env["uploads"] == []
+
+
+def test_aggregate_records_versions_used(env) -> None:
+    client = env["client"]
+    pid = _open_project(client)["id"]
+    _, token = _invite(client, pid, "edita@example.com")
+    _submit(_anon(client), token)
+    _login(client)
+    _, other = _invite(client, pid, "otro@example.com")
+    _submit(_anon(client), other)
+    _submit(_anon(client), token, cc=CC_V2)
+    _login(client)
+
+    job_id = _aggregate(client, pid).json()["job_id"]
+    versions = {e["email"]: e["input_version"] for e in client.get(f"/app/jobs/{job_id}").json()["expertos"]}
+    assert versions == {"edita@example.com": 2, "otro@example.com": 1}
+
+
+PATHS_A = "From,Through1,To,Count,Mean,SD\na,b,e1,1,0.75,0\nb,a,e2,1,0.5,0\n"
+PATHS_B = "From,Through1,To,Count,Mean,SD\na,b,e1,1,0.6,0\na,e1,e3,1,0.9,0\n"
+
+
+def test_compare_expert_paths(env, monkeypatch) -> None:
+    client = env["client"]
+    pid, (id2, id1) = _project_with_inputs(env, 2)
+    lanzados = {x["input_id"]: x["job_id"] for x in _compute(client, pid).json()["lanzados"]}
+    job1, job2 = lanzados[id1], lanzados[id2]
+    contents = {job1: PATHS_A, job2: PATHS_B}
+
+    async def fake_download(pool_, node, scripts_wf_dir, job_id, orders, dest_dir):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for order in orders:
+            (dest_dir / f"paths_order_{order}.csv").write_text(contents[job_id])
+
+    monkeypatch.setattr(fe_api, "download_fe_results", fake_download)
+
+    url = f"/app/projects/{pid}/compare"
+    assert client.get(url, params={"job_ids": [job1, job2]}).status_code == 409  # aún pendientes
+    _finish(env, job1, [2])
+    _finish(env, job2, [2])
+
+    res = client.get(url, params={"job_ids": [job1, job2]})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert [c["job_id"] for c in body["columnas"]] == [job1, job2]
+    assert body["columnas"][0]["email"] == "experto0@example.com"
+    assert body["warnings"] == []
+    order = body["orders"][0]
+    assert order["order"] == 2 and order["columns"] == ["From", "Through1", "To"]
+    assert order["paths"] == [
+        {"path": ["a", "b", "e1"], "means": [0.75, 0.6], "shared": 2},
+        {"path": ["a", "e1", "e3"], "means": [None, 0.9], "shared": 1},
+        {"path": ["b", "a", "e2"], "means": [0.5, None], "shared": 1},
+    ]
+
+    assert client.get(url, params={"job_ids": [job1]}).status_code == 400
+    assert client.get(url, params={"job_ids": [job1, "999"]}).status_code == 404
+
+    # Otro cálculo del mismo experto con otro THR: no se repite un experto, y se avisa si difieren.
+    job3 = _compute(client, pid, thr=0.7, input_ids=[id1]).json()["lanzados"][0]["job_id"]
+    contents[job3] = PATHS_A
+    _finish(env, job3, [2])
+    assert client.get(url, params={"job_ids": [job1, job3]}).status_code == 400
+    res = client.get(url, params={"job_ids": [job3, job2]})
+    assert res.status_code == 200 and "THR" in res.json()["warnings"][0]
+
+    # Un agregado no se compara como experto.
+    agg = _aggregate(client, pid).json()["job_id"]
+    assert client.get(url, params={"job_ids": [job1, agg]}).status_code == 400

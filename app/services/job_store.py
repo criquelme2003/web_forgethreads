@@ -11,7 +11,7 @@ from app.db.engine import get_engine
 from app.db.schema import jobs
 
 JobStatus = Literal["pending", "success", "error", "partial"]
-JobKind = Literal["maxmin", "fe"]
+JobKind = Literal["maxmin", "fe", "sweep"]
 
 
 class JobNotFoundError(Exception):

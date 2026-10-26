@@ -190,3 +190,23 @@ details.card>summary{cursor:pointer;list-style:revert}
 .people{display:flex;flex-direction:column;gap:6px;margin:8px 0 12px}
 .people-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .link-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+
+/* barrido: paneles pequeños con ejes compartidos (una serie azul, régimen de c por forma) */
+.sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.sw-panel{margin:0;min-width:0}
+.sw-title{font-size:13px;font-weight:600;margin-bottom:2px}
+.sw-plot{position:relative;width:100%}
+.sw-plot svg{display:block}
+.sw-line{fill:none;stroke:#2a78d6;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.sw-band{fill:#2a78d6;fill-opacity:.1}
+.sw-err line{stroke:#2a78d6;stroke-width:1}
+.sw-mark{fill:#2a78d6;stroke:#fff;stroke-width:2}
+.sw-mark.is-hover{fill:#1d5aa6}
+.sw-ref{stroke:#d1d5db;stroke-width:1}
+.sw-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.sw-legend span{display:inline-flex;gap:5px;align-items:center}
+.combo-grid td.ok{color:var(--ok)}
+.combo-grid td.skip{color:var(--muted);background:#f9fafb}
+.compare-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
+.compare-grid>div{min-width:0}
+th.num{text-align:right}

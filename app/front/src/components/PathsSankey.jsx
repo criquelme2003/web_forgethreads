@@ -65,7 +65,7 @@ function useWidth(ref) {
  * `origin` / `onOriginChange`: un clic en un nodo de la columna From filtra por ese origen
  * (otro clic sobre el origen activo quita el filtro).
  */
-export default function PathsSankey({ columns, rows, metric, causes, origin, onOriginChange }) {
+export default function PathsSankey({ columns, rows, metric, causes, origin, onOriginChange, minLayerWidth = MIN_LAYER_WIDTH }) {
   const wrapRef = useRef(null);
   const width = useWidth(wrapRef);
   const [hover, setHover] = useState(null); // { paths:Set, tip:{x,y,title,value,detail} }
@@ -74,7 +74,7 @@ export default function PathsSankey({ columns, rows, metric, causes, origin, onO
 
   const layout = useMemo(() => {
     if (!width || graph.links.length === 0) return null;
-    const chartWidth = Math.max(width, graph.layers.length * MIN_LAYER_WIDTH);
+    const chartWidth = Math.max(width, graph.layers.length * minLayerWidth);
     const perLayer = new Map();
     graph.nodes.forEach((n) => perLayer.set(n.layer, (perLayer.get(n.layer) || 0) + 1));
     const height = Math.min(1400, Math.max(260, Math.max(...perLayer.values()) * ROW_HEIGHT + HEADER + 10));
@@ -97,7 +97,7 @@ export default function PathsSankey({ columns, rows, metric, causes, origin, onO
       return n ? n.x0 : 0;
     });
     return { nodes, links, height, layerX, chartWidth };
-  }, [graph, width]);
+  }, [graph, width, minLayerWidth]);
 
   const lastLayer = graph.layers.length - 1;
   const isLit = (paths) => !hover || [...paths].some((p) => hover.paths.has(p));

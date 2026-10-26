@@ -1,4 +1,4 @@
-"""Transferencias SFTP de fe_job: subida del input y descarga de los CSV de caminos."""
+"""Transferencias SFTP con el cluster: input de fe_job, CSV de caminos y CSV del barrido."""
 
 import io
 import json
@@ -22,11 +22,16 @@ def build_fe_input_files(
     ee: np.ndarray,
     meta: dict,
 ) -> dict[str, bytes]:
-    """Arma el contenido de jobs_inputs/<request_id>/ que espera fe_job.py (tensores (k, filas, cols))."""
-    files = {
-        f"{name}.npy": npy_bytes(np.asarray(matrix, dtype=np.float32).reshape(1, *matrix.shape))
-        for name, matrix in (("CC", cc), ("CE", ce), ("EE", ee))
-    }
+    """Arma el contenido de jobs_inputs/<request_id>/ que espera fe_job.py (tensores (k, filas, cols)).
+
+    Una matriz 2D es un solo experto (k = 1); un tensor 3D son `k` expertos apilados (RF-24).
+    """
+    files = {}
+    for name, matrix in (("CC", cc), ("CE", ce), ("EE", ee)):
+        tensor = np.asarray(matrix, dtype=np.float32)
+        if tensor.ndim == 2:
+            tensor = tensor.reshape(1, *tensor.shape)
+        files[f"{name}.npy"] = npy_bytes(tensor)
     files["meta.json"] = json.dumps(meta, ensure_ascii=False).encode("utf-8")
     return files
 
@@ -71,3 +76,21 @@ async def download_fe_results(
             tmp = dest_dir / f".{filename}.tmp"
             tmp.write_bytes(content)
             tmp.replace(dest_dir / filename)
+
+
+async def download_sweep_results(
+    pool: SSHConnectionPool,
+    node: str,
+    scripts_wf_dir: str,
+    job_id: str,
+    dest: Path,
+) -> None:
+    """Descarga jobs_results/<job_id>.csv (CSV crudo del barrido) a `dest`."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    remote = posixpath.join(scripts_wf_dir, "jobs_results", f"{job_id}.csv")
+    conn = await pool.get_connection(node)
+    async with conn.start_sftp_client() as sftp, sftp.open(remote, "rb") as remote_file:
+        content = await remote_file.read()
+    tmp = dest.parent / f".{dest.name}.tmp"
+    tmp.write_bytes(content)
+    tmp.replace(dest)

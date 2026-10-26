@@ -278,6 +278,18 @@ export default function FeResult() {
               </span>
             </>
           )}
+          {job.expertos && (
+            <>
+              <span>Agregado de</span>
+              <span className="small">
+                {job.expertos.length} expertos: {job.expertos.map((e) => `${e.nombre || e.email} (v${e.input_version})`).join(', ')}
+                {job.expertos.some((e) => e.input_version < e.version_vigente) && (
+                  <>{' '}<span className="badge outdated" title="Algún experto modificó su input después de este cálculo">input modificado</span></>
+                )}
+              </span>
+              <span>Repeticiones</span><span>{params.reps ?? '—'} (bootstrap)</span>
+            </>
+          )}
           <span>Nodo</span><span>{job.node}</span>
           <span>THR</span><span>{params.thr ?? '—'}</span>
           <span>Orden máximo</span><span>{params.maxorder ?? '—'}</span>

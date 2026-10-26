@@ -4,6 +4,7 @@ import { apiJson, fetchMe, send } from '../api.js';
 import LinkBox from '../components/LinkBox.jsx';
 import { errorText } from '../components/MatricesInput.jsx';
 import MaxMinForm from '../components/MaxMinForm.jsx';
+import SweepForm from '../components/SweepForm.jsx';
 import { ExpertFields, expertPayload, fmtDate, TIPO_LABELS } from './Projects.jsx';
 
 const POLL_MS = 5000; // con cálculos en curso
@@ -319,7 +320,7 @@ function ComputeForm({ project, selected, names, onDone }) {
   );
 }
 
-function Inputs({ project, onChanged, onNewInputs }) {
+function Inputs({ project, onChanged, onNewInputs, onItems }) {
   const [items, setItems] = useState(null);
   const [selected, setSelected] = useState(null); // Set de ids; null = aún sin cargar
   const [msg, setMsg] = useState('');
@@ -330,6 +331,7 @@ function Inputs({ project, onChanged, onNewInputs }) {
     const { ok, data } = await send(`/app/projects/${project.id}/inputs`, 'GET').catch(() => ({}));
     if (!ok) return null;
     setItems(data);
+    onItems?.(data);
     // Por defecto quedan elegidos los inputs no excluidos; los nuevos se agregan a la selección.
     const known = knownIds.current;
     setSelected((prev) => {
@@ -339,6 +341,7 @@ function Inputs({ project, onChanged, onNewInputs }) {
     });
     knownIds.current = new Set(data.map((i) => i.id));
     return data;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
   useEffect(() => {
@@ -465,6 +468,183 @@ function Inputs({ project, onChanged, onNewInputs }) {
   );
 }
 
+// --- análisis conjunto (RF-24 a RF-26) ----------------------------------------------------------
+
+function expertLabel(e) {
+  return e.nombre || e.email;
+}
+
+/** Cálculo agregado de los inputs no excluidos, lista de agregados y elección de expertos a comparar. */
+function JointAnalysis({ project, inputs, refreshKey }) {
+  const navigate = useNavigate();
+  const [jobs, setJobs] = useState(null);
+  const [pollKey, setPollKey] = useState(0);
+  const [thr, setThr] = useState('0.5');
+  const [maxorder, setMaxorder] = useState('3');
+  const [reps, setReps] = useState('1000');
+  const [nodo, setNodo] = useState('');
+  const [nodeOptions, setNodeOptions] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({ text: '', kind: 'muted' });
+  const [chosen, setChosen] = useState(() => new Set());
+
+  useEffect(() => {
+    apiJson('/app/nodes/available')
+      .then((data) => setNodeOptions(Array.isArray(data.options) ? data.options : []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let timer;
+    let cancelled = false;
+    async function poll() {
+      const { ok, data } = await send(`/app/projects/${project.id}/jobs`, 'GET').catch(() => ({}));
+      if (cancelled) return;
+      if (ok) setJobs(data.filter((j) => j.kind === 'fe'));
+      if (!ok || data.some((j) => j.kind === 'fe' && j.status === 'pending')) timer = setTimeout(poll, POLL_MS);
+    }
+    poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [project.id, refreshKey, pollKey]);
+
+  const included = (inputs || []).filter((i) => !i.excluido);
+  const aggregates = (jobs || []).filter((j) => j.expertos);
+  const comparable = (jobs || []).filter((j) => j.experto && j.status === 'success');
+
+  async function launch(e) {
+    e.preventDefault();
+    const body = { thr: Number(thr.replace(',', '.')), maxorder: Number(maxorder), reps: Number(reps), nodo: nodo || null };
+    if (!(body.thr >= 0 && body.thr <= 1)) return setMsg({ text: 'THR debe estar en [0,1].', kind: 'err' });
+    if (!Number.isInteger(body.maxorder) || body.maxorder < 2 || body.maxorder > 10) return setMsg({ text: 'El orden máximo debe ser un entero entre 2 y 10.', kind: 'err' });
+    if (!Number.isInteger(body.reps) || body.reps < 1) return setMsg({ text: 'Las repeticiones del bootstrap deben ser un entero ≥ 1.', kind: 'err' });
+    setBusy(true);
+    setMsg({ text: 'Lanzando…', kind: 'muted' });
+    const { ok, data } = await send(`/app/projects/${project.id}/aggregate`, 'POST', body).catch(() => ({ ok: false, data: {} }));
+    setBusy(false);
+    if (!ok) return setMsg({ text: errorText(data, 'No se pudo lanzar el cálculo agregado'), kind: 'err' });
+    setMsg({ text: `Cálculo agregado lanzado (job ${data.job_id}, ${data.input_ids.length} expertos).`, kind: 'ok' });
+    setPollKey((k) => k + 1);
+    return undefined;
+  }
+
+  function toggle(jobId) {
+    setChosen((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  }
+
+  const chosenJobs = comparable.filter((j) => chosen.has(j.job_id));
+  const repeatedExpert = new Set(chosenJobs.map((j) => j.experto.input_id)).size < chosenJobs.length;
+
+  return (
+    <div className="card">
+      <h2>Análisis conjunto</h2>
+      <p className="sub">
+        El cálculo agregado apila los inputs no excluidos (k ≥ 2) y aplica el bootstrap: el resultado trae Count, Mean y SD.
+        Para comparar expertos, elige un cálculo por experto entre los terminados.
+      </p>
+      <form className="compute-form" onSubmit={launch} noValidate>
+        <div className="grid-3">
+          <div className="field">
+            <label htmlFor="agg-thr">THR</label>
+            <input id="agg-thr" inputMode="decimal" value={thr} onChange={(e) => setThr(e.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor="agg-maxorder">Orden máximo</label>
+            <input id="agg-maxorder" type="number" min="2" max="10" step="1" value={maxorder} onChange={(e) => setMaxorder(e.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor="agg-reps">Repeticiones (bootstrap)</label>
+            <input id="agg-reps" type="number" min="1" step="1" value={reps} onChange={(e) => setReps(e.target.value)} />
+          </div>
+        </div>
+        <div className="grid-3">
+          <div className="field">
+            <label htmlFor="agg-nodo">Nodo</label>
+            <select id="agg-nodo" value={nodo} onChange={(e) => setNodo(e.target.value)}>
+              <option value="">Automático</option>
+              {nodeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="actions">
+          <button type="submit" className="btn-primary" disabled={busy || included.length < 2}>
+            {busy ? 'Lanzando…' : `Calcular agregado de ${included.length} expertos`}
+          </button>
+          <span className={`status ${msg.kind} small`} role="status" aria-live="polite">
+            {msg.text || (included.length < 2 ? 'Hacen falta al menos 2 inputs no excluidos.' : included.map(expertName).join(', '))}
+          </span>
+        </div>
+      </form>
+
+      <h2 style={{ margin: '6px 0 8px', fontSize: 14 }}>Cálculos agregados</h2>
+      <div style={{ overflow: 'auto' }}>
+        <table>
+          <thead><tr><th>Job</th><th>Estado</th><th>THR</th><th>Orden</th><th>Reps</th><th>Expertos</th><th>Creado</th></tr></thead>
+          <tbody>
+            {jobs === null && <tr><td colSpan="7" className="empty">Cargando…</td></tr>}
+            {jobs !== null && aggregates.length === 0 && <tr><td colSpan="7" className="empty">Sin cálculos agregados</td></tr>}
+            {aggregates.map((j) => {
+              const p = j.params || {};
+              const outdated = j.expertos.some((e) => e.input_version < e.version_vigente);
+              return (
+                <tr key={j.job_id}>
+                  <td className="mono"><Link to={`/fe/jobs/${j.job_id}`}>{j.job_id}</Link></td>
+                  <td><span className={`badge ${jobBadge(j.status)}`}>{j.status}</span></td>
+                  <td>{p.thr ?? '—'}</td>
+                  <td>{p.maxorder ?? '—'}</td>
+                  <td>{p.reps ?? '—'}</td>
+                  <td className="small">
+                    {j.expertos.length}: {j.expertos.map(expertLabel).join(', ')}
+                    {outdated && <>{' '}<span className="badge outdated" title="Algún experto modificó su input después de este cálculo">input modificado</span></>}
+                  </td>
+                  <td className="small">{fmtDate(j.created_at)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <h2 style={{ margin: '18px 0 8px', fontSize: 14 }}>Comparar expertos</h2>
+      {comparable.length < 2 ? (
+        <p className="small muted">Se necesitan al menos dos cálculos por experto terminados.</p>
+      ) : (
+        <>
+          <div className="calc-list" style={{ maxHeight: 240, overflow: 'auto' }}>
+            {comparable.map((j) => (
+              <label key={j.job_id} className="checkbox-label">
+                <input type="checkbox" checked={chosen.has(j.job_id)} onChange={() => toggle(j.job_id)} />
+                <span>
+                  <strong style={{ color: 'var(--text)' }}>{expertLabel(j.experto)}</strong>
+                  {' '}· THR {j.params?.thr} · orden {j.params?.maxorder} · v{j.experto.input_version} · job <span className="mono">{j.job_id}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="actions" style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={chosenJobs.length < 2 || repeatedExpert}
+              onClick={() => navigate(`/projects/${project.id}/compare?jobs=${chosenJobs.map((j) => j.job_id).join(',')}`)}
+            >
+              Comparar {chosenJobs.length || ''} cálculos
+            </button>
+            {repeatedExpert && <span className="status err small">Elige un solo cálculo por experto.</span>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // --- administradores del proyecto (RF-49) ------------------------------------------------------
 
 function personLabel(p) {
@@ -555,16 +735,50 @@ function SimulationJobs({ project, refreshKey }) {
     };
   }, [project.id, refreshKey]);
 
+  const maxmin = jobs && jobs.filter((j) => j.kind === 'maxmin');
+  const sweeps = jobs && jobs.filter((j) => j.kind === 'sweep');
+
   return (
+    <>
+    <div className="card">
+      <h2 style={{ marginBottom: 10 }}>Barridos</h2>
+      <div style={{ overflow: 'auto' }}>
+        <table>
+          <thead><tr><th>Job</th><th>Estado</th><th>N</th><th>c</th><th>R</th><th>THR</th><th>Combinaciones</th><th>Tiempo (s)</th><th>Nodo</th><th>Creado</th></tr></thead>
+          <tbody>
+            {sweeps === null && <tr><td colSpan="10" className="empty">Cargando…</td></tr>}
+            {sweeps !== null && sweeps.length === 0 && <tr><td colSpan="10" className="empty">Sin barridos</td></tr>}
+            {(sweeps || []).map((j) => {
+              const p = j.params || {};
+              const r = j.result || {};
+              return (
+                <tr key={j.job_id}>
+                  <td className="mono"><Link to={`/sweeps/${j.job_id}`}>{j.job_id}</Link></td>
+                  <td><span className={`badge ${jobBadge(j.status)}`}>{j.status === 'partial' ? 'parcial' : j.status}</span></td>
+                  <td className="small">{(p.ns || []).join(', ')}</td>
+                  <td className="small">{(p.cs || []).join(', ')}</td>
+                  <td>{p.reps ?? '—'}</td>
+                  <td>{p.thr ?? '—'}</td>
+                  <td>{r.completed_combinations != null ? `${r.completed_combinations}/${r.total_combinations ?? p.combinaciones}` : p.combinaciones ?? '—'}</td>
+                  <td>{j.computation_time_s != null ? j.computation_time_s.toFixed(1) : '—'}</td>
+                  <td>{j.node}</td>
+                  <td className="small">{fmtDate(j.created_at)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
     <div className="card">
       <h2 style={{ marginBottom: 10 }}>Cálculos MaxMin</h2>
       <div style={{ overflow: 'auto' }}>
         <table>
           <thead><tr><th>Job</th><th>Estado</th><th>N</th><th>c</th><th>THR</th><th>Seed</th><th>Orden</th><th>Tiempo (s)</th><th>Nodo</th><th>Creado</th></tr></thead>
           <tbody>
-            {jobs === null && <tr><td colSpan="10" className="empty">Cargando…</td></tr>}
-            {jobs !== null && jobs.length === 0 && <tr><td colSpan="10" className="empty">Sin cálculos</td></tr>}
-            {(jobs || []).map((j) => {
+            {maxmin === null && <tr><td colSpan="10" className="empty">Cargando…</td></tr>}
+            {maxmin !== null && maxmin.length === 0 && <tr><td colSpan="10" className="empty">Sin cálculos</td></tr>}
+            {(maxmin || []).map((j) => {
               const p = j.params || {};
               return (
                 <tr key={j.job_id}>
@@ -585,6 +799,7 @@ function SimulationJobs({ project, refreshKey }) {
         </table>
       </div>
     </div>
+    </>
   );
 }
 
@@ -600,6 +815,7 @@ export default function ProjectDetail() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [inputsKey, setInputsKey] = useState(0); // sube al llegar inputs nuevos: recarga invitaciones
   const [me, setMe] = useState(null);
+  const [inputItems, setInputItems] = useState(null);
 
   useEffect(() => {
     fetchMe().then(setMe).catch(() => {});
@@ -699,6 +915,15 @@ export default function ProjectDetail() {
           project={project}
           onChanged={load}
           onNewInputs={() => { setInputsKey((k) => k + 1); load(); }}
+          onItems={setInputItems}
+        />
+      )}
+      {expert && (
+        <JointAnalysis
+          project={project}
+          inputs={inputItems}
+          // Se recarga al llegar inputs o al cambiar el estado de un cálculo por experto.
+          refreshKey={`${inputsKey}|${(inputItems || []).flatMap((i) => i.calculos.map((c) => `${c.job_id}:${c.status}`)).join(',')}`}
         />
       )}
 
@@ -707,6 +932,18 @@ export default function ProjectDetail() {
           <h2 style={{ marginBottom: 10 }}>Nuevo cálculo MaxMin</h2>
           {project.estado !== 'abierto' && <p className="small muted">El proyecto está cerrado: reábrelo para lanzar cálculos.</p>}
           <MaxMinForm projectId={project.id} disabled={project.estado !== 'abierto'} onLaunched={() => { setRefreshKey((k) => k + 1); load(); }} />
+        </div>
+      )}
+      {!expert && (
+        <div className="card">
+          <h2 style={{ marginBottom: 4 }}>Nuevo barrido</h2>
+          <p className="sub">
+            Recorre cada c y cada N con R repeticiones en un solo job y estima el orden efectivo medio L(N, c),
+            como <span className="mono">comprobacion_empirica/test2.py</span>. Antes de lanzar se revisan las combinaciones válidas
+            (N par y c ≤ N/2 − 1) y la duración estimada.
+          </p>
+          {project.estado !== 'abierto' && <p className="small muted">El proyecto está cerrado: reábrelo para lanzar barridos.</p>}
+          <SweepForm projectId={project.id} disabled={project.estado !== 'abierto'} onLaunched={() => setRefreshKey((k) => k + 1)} />
         </div>
       )}
       {!expert && <SimulationJobs project={project} refreshKey={refreshKey} />}

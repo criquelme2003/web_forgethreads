@@ -16,6 +16,8 @@ Los cambios del lado del cluster están detallados en [scripts_wf_requerimientos
 
 **Implementado** (2026-10-19): roles, alta y desactivación de admins, co-admins y filtro por membresía (RF-01 a RF-05, RF-48, RF-49); invitaciones con nombre, edición del input con versiones, reenvío por lotes, eliminación y atribución (RF-10, RF-11, RF-19, RF-20, RF-50 a RF-54); RF-55. Queda pendiente el reporte (RF-56 a RF-60), que depende de D-01.
 
+**Implementado** (2026-10-26): análisis conjunto, con cálculo agregado y comparación de expertos (RF-24 a RF-26, RF-28), y barrido de simulación (RF-31 a RF-37, RNF-02). La estimación de duración del barrido usa coeficientes configurables (`SWEEP_*`) que hay que calibrar con barridos reales, y ambos dependen de que scripts_wf implemente `fe_job` con k ≥ 2 (T2), `sweep_job` (T3) y el estado `partial` del notifier (T1).
+
 ## Contexto
 
 La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálculos MaxMin sueltos en el cluster SLURM (`new_job.sh` + `notifier.sh` encadenado, callback a `/app/job_callback`). Los nuevos requerimientos introducen la entidad **proyecto**, con dos tipos:

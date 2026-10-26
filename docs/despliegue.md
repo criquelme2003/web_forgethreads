@@ -3,7 +3,7 @@
 | Archivo | Recursos |
 |---|---|
 | `postgres.yaml` | PostgreSQL 17 (StatefulSet `wf-postgres` + Service) con un contenedor `backup` que corre `pg_dump` una vez al día. Dos volúmenes de 2Gi en `csi-cephfs-sc`: datos y respaldos. |
-| `deployment.yaml` | La app (Deployment + Service + Ingress) y un volumen de 1Gi para los resultados descargados del cluster (`/code/data/fe_results`). |
+| `deployment.yaml` | La app (Deployment + Service + Ingress) y un volumen de 1Gi para los resultados descargados del cluster (`/code/data/fe_results` y `/code/data/sweep_results`). |
 
 La app se conecta con `DATABASE_URL=postgresql://wf:<clave>@wf-postgres:5432/wf`, que se arma en
 `deployment.yaml` con la clave del secret `wf-postgres`. Al arrancar aplica las migraciones de

@@ -38,6 +38,24 @@ def build_fe_job_command(scripts_wf_dir: str, input_dir: str) -> str:
     return f"cd {shlex.quote(scripts_wf_dir)} && sbatch fe_job.sh --input-dir {shlex.quote(input_dir)}"
 
 
+def build_sweep_job_command(
+    scripts_wf_dir: str,
+    time_limit: str,
+    ns: list[int],
+    cs: list[str],
+    reps: int,
+    threshold: float,
+    seed_base: int,
+) -> str:
+    """sbatch de sweep_job.sh (RF-33); `cs` ya formateados y `time_limit` en formato de --time."""
+    return (
+        f"cd {shlex.quote(scripts_wf_dir)} && "
+        f"sbatch --time={shlex.quote(time_limit)} sweep_job.sh "
+        f"--ns {shlex.quote(','.join(str(n) for n in ns))} --cs {shlex.quote(','.join(cs))} "
+        f"--reps {int(reps)} --thr {shlex.quote(repr(float(threshold)))} --seed-base {int(seed_base)}"
+    )
+
+
 def build_notifier_command(
     scripts_wf_dir: str,
     job_id: str,
