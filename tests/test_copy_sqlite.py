@@ -57,7 +57,7 @@ def test_copies_legacy_sqlite(tmp_path: Path, database: str) -> None:
 
     assert copied == {
         "users": 0, "projects": 1, "jobs": 2, "project_admins": 0, "expert_invitations": 1,
-        "expert_inputs": 1, "expert_input_versions": 1,
+        "expert_inputs": 1, "expert_input_versions": 1, "posts": 0,
     }
     assert source.read_bytes() == before  # el origen no se toca
 

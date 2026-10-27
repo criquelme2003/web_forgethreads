@@ -5,6 +5,7 @@ import LinkBox from '../components/LinkBox.jsx';
 import { errorText } from '../components/MatricesInput.jsx';
 import MaxMinForm from '../components/MaxMinForm.jsx';
 import SweepForm from '../components/SweepForm.jsx';
+import { createPost, PostTable } from './Posts.jsx';
 import { ExpertFields, expertPayload, fmtDate, TIPO_LABELS } from './Projects.jsx';
 
 const POLL_MS = 5000; // con cálculos en curso
@@ -993,19 +994,52 @@ function ProjectOverview({ project, editing, onEditDone, onSaved, me, onAdminsCh
   );
 }
 
+/** Publicaciones del blog sobre este proyecto, y una nueva precargada con sus recursos (RF-56). */
+function ProjectPosts({ project }) {
+  const navigate = useNavigate();
+  const [posts, setPosts] = useState(null);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    apiJson(`/app/posts?project_id=${project.id}`).then((d) => setPosts(Array.isArray(d) ? d : [])).catch(() => setPosts([]));
+  }, [project.id]);
+
+  async function create() {
+    setMsg(await createPost(navigate, { titulo: project.nombre, project_id: project.id }));
+  }
+
+  return (
+    <div className="card">
+      <div className="chart-head">
+        <h2>Publicaciones</h2>
+        <button type="button" className="btn primary" onClick={create}>Nueva publicación</button>
+      </div>
+      <p className="sub">
+        Cuenta los resultados del proyecto en el <a href="/front/blog" target="_blank" rel="noreferrer">blog público</a>.
+        El proyecto puede tener varias publicaciones. Una nueva parte con las secciones de un artículo y el cálculo terminado más
+        reciente como figura; luego puedes agregar otros cálculos y decidir cuáles se muestran y cuáles datos se pueden descargar.
+      </p>
+      {msg && <p className="status err small">{msg}</p>}
+      {posts ? <PostTable posts={posts} /> : <div className="empty">Cargando…</div>}
+    </div>
+  );
+}
+
 // --- página ------------------------------------------------------------------------------------
 
-/** Vistas del proyecto (`/projects/:id`, `/projects/:id/individual`, `/projects/:id/lote`). */
+/** Vistas del proyecto (`/projects/:id`, `/projects/:id/individual`, `/projects/:id/lote`, `/projects/:id/blog`). */
 const TABS = {
   expertos: [
     { key: '', label: 'Proyecto' },
     { key: 'individual', label: 'Por experto' },
     { key: 'lote', label: 'Agregados' },
+    { key: 'blog', label: 'Publicaciones' },
   ],
   simulacion: [
     { key: '', label: 'Proyecto' },
     { key: 'individual', label: 'MaxMin individual' },
     { key: 'lote', label: 'Barridos' },
+    { key: 'blog', label: 'Publicaciones' },
   ],
 };
 
@@ -1136,6 +1170,8 @@ export default function ProjectDetail() {
           <MaxMinJobs project={project} refreshKey={refreshKey} />
         </>
       )}
+      {tab === 'blog' && <ProjectPosts project={project} />}
+
       {!expert && tab === 'lote' && (
         <>
           <div className="card">

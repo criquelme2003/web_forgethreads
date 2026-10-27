@@ -6,6 +6,7 @@ const LINKS = [
   { to: '/projects', label: 'Proyectos' },
   { to: '/fe', label: 'Caminos' },
   { to: '/jobs', label: 'Trabajos' },
+  { to: '/posts', label: 'Blog' },
   { to: '/gpu_status', label: 'GPU' },
   { to: '/cluster_status', label: 'Cluster' },
 ];
@@ -18,6 +19,7 @@ const SECTIONS = {
   '/cluster_status': 'Cluster',
   '/fe': 'Caminos',
   '/users': 'Usuarios',
+  '/posts': 'Blog',
 };
 
 export default function Layout() {
@@ -29,7 +31,8 @@ export default function Layout() {
   const section = SECTIONS[pathname]
     || (pathname.startsWith('/fe/') ? 'Caminos' : '')
     || (pathname.startsWith('/projects/') ? 'Proyectos' : '')
-    || (pathname.startsWith('/maxmin/') ? 'MaxMin' : '');
+    || (pathname.startsWith('/maxmin/') ? 'MaxMin' : '')
+    || (pathname.startsWith('/posts/') ? 'Blog' : '');
   const links = me?.rol === 'superadmin' ? [...LINKS, ...ADMIN_LINKS] : LINKS;
   return (
     <>

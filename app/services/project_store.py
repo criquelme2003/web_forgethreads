@@ -21,6 +21,7 @@ from app.db.schema import (
     expert_inputs,
     expert_invitations,
     jobs,
+    posts,
     project_admins,
     projects,
 )
@@ -375,7 +376,7 @@ class ProjectStore:
         return await self._write(fn)
 
     async def delete_project(self, project_id: int) -> None:
-        """Borra el proyecto y sus invitaciones. Quien llama verifica que no tenga inputs ni cálculos."""
+        """Borra el proyecto y sus invitaciones (sus publicaciones quedan sin proyecto). Quien llama verifica que no tenga inputs ni cálculos."""
 
         async def fn(conn: AsyncConnection) -> None:
             await self._get_project(conn, project_id)
@@ -385,6 +386,8 @@ class ProjectStore:
             await conn.execute(
                 sql_delete(project_admins).where(project_admins.c.project_id == project_id)
             )
+            # Las publicaciones quedan sin proyecto: las sigue editando su autor.
+            await conn.execute(update(posts).where(posts.c.project_id == project_id).values(project_id=None))
             await conn.execute(sql_delete(projects).where(projects.c.id == project_id))
 
         await self._write(fn)
@@ -689,6 +692,26 @@ class ProjectStore:
                 r.id: InputAuthor(input_id=r.id, email=r.email, nombre=r.nombre, version=r.version or 1)
                 for r in rows
             }
+
+        return await self._read(fn)
+
+    async def version_matrices(
+        self, pairs: list[tuple[int, int]]
+    ) -> dict[tuple[int, int], tuple[list, list, list]]:
+        """Matrices (cc, ce, ee) de cada (input_id, versión), para exportar el input usado en un cálculo."""
+        if not pairs:
+            return {}
+
+        async def fn(conn: AsyncConnection) -> dict[tuple[int, int], tuple[list, list, list]]:
+            rows = await conn.execute(
+                select(expert_input_versions).where(
+                    or_(*(
+                        and_(expert_input_versions.c.input_id == i, expert_input_versions.c.version == v)
+                        for i, v in pairs
+                    ))
+                )
+            )
+            return {(r.input_id, r.version): (r.cc, r.ce, r.ee) for r in rows}
 
         return await self._read(fn)
 
