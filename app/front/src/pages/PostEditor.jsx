@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiJson, send } from '../api.js';
 import { errorText } from '../components/MatricesInput.jsx';
-import PostView, { HOW_TO_READ } from '../components/PostView.jsx';
+import PostView, { FigureBlock, HOW_TO_READ } from '../components/PostView.jsx';
+import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
 import { fmtDate } from './Projects.jsx';
 import { PostState } from './Posts.jsx';
 
@@ -146,6 +147,7 @@ function FigureEditor({ fig, job, cited, onChange, onCite }) {
         <label className="checkbox-label"><input type="checkbox" checked={!!fig.publico} onChange={set('publico')} /> Mostrar el gráfico en la publicación</label>
         <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_entradas} onChange={set('descargar_entradas')} /> Permitir descargar las entradas ({INPUTS_HINT[job.kind]})</label>
         <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_resultados} onChange={set('descargar_resultados')} /> Permitir descargar los resultados completos ({RESULTS_HINT[job.kind]})</label>
+        <label className="checkbox-label"><input type="checkbox" checked={!!fig.en_cuerpo} onChange={set('en_cuerpo')} /> Mostrarla también en el cuerpo del texto, bajo la sección donde se cita por primera vez</label>
       </div>
       <div className="controls" style={{ margin: '10px 0 0' }}>
         <button type="button" onClick={onCite}>Citar en el texto</button>
@@ -166,18 +168,44 @@ function FigureEditor({ fig, job, cited, onChange, onCite }) {
   );
 }
 
-function CalcPicker({ jobs, onPick, onClose, scope }) {
+/** Vista previa de la figura con los cambios aún sin guardar (se pide 0,4 s después del último cambio). */
+function FigurePreview({ postId, fig }) {
+  const [state, setState] = useState({ data: null, error: '', loading: true });
+  const body = JSON.stringify(stripKey(fig));
+  useEffect(() => {
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true }));
+    const t = setTimeout(async () => {
+      const { ok, data } = await send(`/app/posts/${postId}/figure-preview`, 'POST', JSON.parse(body)).catch(() => ({ ok: false, data: {} }));
+      if (cancelled) return;
+      setState(ok ? { data, error: '', loading: false } : { data: null, error: errorText(data, 'No se pudo armar la vista previa'), loading: false });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [postId, body]);
+  return (
+    <div className="post-figure-preview">
+      <div className="post-side-title">Vista previa {state.loading && <span className="muted">· actualizando…</span>}</div>
+      {state.error && <p className="status err small">{state.error}</p>}
+      {state.data && (
+        <VizErrorBoundary resetKey={body}>
+          <FigureBlock b={state.data} />
+        </VizErrorBoundary>
+      )}
+    </div>
+  );
+}
+
+function CalcPicker({ jobs, onPick, scope }) {
   const options = jobs.filter(publishable);
   return (
     <div className="post-picker">
-      <div className="chart-head">
-        <h2>Agregar una figura</h2>
-        <button type="button" className="btn" onClick={onClose}>Cerrar</button>
-      </div>
       <p className="sub">{scope} Solo aparecen los terminados.</p>
       {!options.length && <div className="empty">No hay cálculos terminados.</div>}
       {options.length > 0 && (
-        <div style={{ overflow: 'auto', maxHeight: 380 }}>
+        <div style={{ overflow: 'auto', maxHeight: '60vh' }}>
           <table>
             <thead><tr><th>Tipo</th><th>Detalle</th><th>Fecha</th><th /></tr></thead>
             <tbody>
@@ -197,6 +225,59 @@ function CalcPicker({ jobs, onPick, onClose, scope }) {
   );
 }
 
+/** Ventana modal; se cierra con Esc, con «Listo» o con un clic fuera. */
+function Modal({ title, onClose, children }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="post-modal" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
+      <div className="post-modal-body post-modal-form" onClick={(e) => e.stopPropagation()}>
+        <div className="chart-head">
+          <h2>{title}</h2>
+          <button type="button" className="btn primary" onClick={onClose}>Listo</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const VIEW_LABEL = Object.fromEntries(Object.values(VIEW_OPTIONS).flat());
+
+/** Fila compacta de una figura en la barra lateral del editor. */
+function FigureItem({ fig, job, loading, cited, first, last, onEdit, onCite, onMove, onRemove }) {
+  const downloads = fig.descargar_entradas || fig.descargar_resultados;
+  let state;
+  if (loading) state = <span className="small muted">cargando…</span>;
+  else if (!job) state = <span className="badge error">no disponible</span>;
+  else if (cited && fig.publico) state = <span className="badge success">se publica</span>;
+  else if (cited) state = <span className="badge error">citada sin permiso</span>;
+  else state = <span className="badge estado-borrador">{fig.publico ? 'sin citar' : 'privada'}</span>;
+  return (
+    <li className="post-figitem">
+      <button type="button" className="post-figitem-main" onClick={onEdit} title="Editar figura">
+        <span className="mono">{fig.ref}</span>{' '}
+        <strong>{job ? KIND_LABEL[job.kind] : 'Cálculo'}</strong>
+        {' · '}{VIEW_LABEL[fig.vista] || fig.vista}{fig.orden ? ` · orden ${fig.orden}` : ''}
+        {job && <span className="post-figitem-detail">{jobDetail(job)}</span>}
+      </button>
+      <div className="post-figitem-foot">
+        <span className="post-figitem-state">{state}{downloads && <span className="small muted" title="Con descargas permitidas"> ↓ datos</span>}{fig.en_cuerpo && <span className="small muted" title="También en el cuerpo del texto"> · en el texto</span>}</span>
+        <span className="post-figitem-actions">
+          <button type="button" onClick={onCite} title="Insertar la cita en el texto, donde está el cursor">Citar</button>
+          <button type="button" onClick={onEdit}>Editar</button>
+          <button type="button" onClick={() => onMove(-1)} disabled={first} aria-label="Subir">↑</button>
+          <button type="button" onClick={() => onMove(1)} disabled={last} aria-label="Bajar">↓</button>
+          <button type="button" onClick={onRemove} aria-label="Quitar">✕</button>
+        </span>
+      </div>
+    </li>
+  );
+}
+
 export default function PostEditor() {
   const { postId } = useParams();
   const navigate = useNavigate();
@@ -209,6 +290,7 @@ export default function PostEditor() {
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState({ text: '', err: false });
   const [picker, setPicker] = useState(false);
+  const [editingKey, setEditingKey] = useState(null); // figura abierta en el modal (_k)
   const [loadError, setLoadError] = useState('');
   const lastText = useRef({ index: null, pos: null }); // última sección y posición del cursor
 
@@ -266,7 +348,7 @@ export default function PostEditor() {
       const i = index != null && index < bs.length ? index : bs.length - 1;
       const text = bs[i].markdown;
       const at = pos != null && pos <= text.length ? pos : text.length;
-      const sep = at > 0 && !/\s$/.test(text.slice(0, at)) ? ' ' : '';
+      const sep = at > 0 && !/[\s([]$/.test(text.slice(0, at)) ? ' ' : '';
       return bs.map((b, j) => (j === i ? { ...b, markdown: `${text.slice(0, at)}${sep}${token}${text.slice(at)}` } : b));
     });
     report(`Cita ${token} insertada en el texto.`);
@@ -349,6 +431,8 @@ export default function PostEditor() {
   if (!post || !draft) return <div className="card"><div className="empty">Cargando…</div></div>;
 
   const published = post.estado === 'publicado';
+  const editingIndex = draft.figuras.findIndex((f) => f._k === editingKey);
+  const editingFigure = editingIndex >= 0 ? { index: editingIndex, fig: draft.figuras[editingIndex] } : null;
   const ItemBar = ({ list, i, label }) => (
     <div className="post-block-bar">
       <span className="small muted">{label}</span>
@@ -394,7 +478,7 @@ export default function PostEditor() {
       {mode === 'vista' && preview && (
         <>
           {preview.avisos.length > 0 && (
-            <div className="card">
+            <div className="card no-print">
               <h2>Antes de publicar</h2>
               <ul className="notes">{preview.avisos.map((a) => <li key={a}>{a}</li>)}</ul>
             </div>
@@ -404,116 +488,142 @@ export default function PostEditor() {
       )}
 
       {mode === 'editar' && (
-        <>
-          <div className="card">
-            <h2 style={{ marginBottom: 12 }}>Artículo</h2>
-            <div className="grid-2" style={{ marginBottom: 14, alignItems: 'start' }}>
-              <div className="field">
-                <label htmlFor="post-titulo">Título</label>
-                <input id="post-titulo" value={draft.titulo} maxLength={200} onChange={(e) => change({ titulo: e.target.value })} />
+        <div className="post-editor-layout">
+          <div className="post-editor-main">
+            <div className="card">
+              <h2 style={{ marginBottom: 12 }}>Artículo</h2>
+              <div className="grid-2" style={{ marginBottom: 14, alignItems: 'start' }}>
+                <div className="field">
+                  <label htmlFor="post-titulo">Título</label>
+                  <input id="post-titulo" value={draft.titulo} maxLength={200} onChange={(e) => change({ titulo: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label htmlFor="post-slug">Dirección</label>
+                  <input id="post-slug" value={draft.slug} maxLength={80} onChange={(e) => change({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })} />
+                  <span className="hint">/front/blog/{draft.slug || '…'}</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="post-autores">Autores</label>
+                  <input id="post-autores" value={draft.autores} maxLength={300} placeholder="A. Pérez, B. Soto" onChange={(e) => change({ autores: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label htmlFor="post-palabras">Palabras clave</label>
+                  <input id="post-palabras" value={draft.palabras} placeholder="efectos olvidados, retail" onChange={(e) => change({ palabras: e.target.value })} />
+                  <span className="hint">Separadas por comas (hasta 10).</span>
+                </div>
               </div>
-              <div className="field">
-                <label htmlFor="post-slug">Dirección</label>
-                <input id="post-slug" value={draft.slug} maxLength={80} onChange={(e) => change({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })} />
-                <span className="hint">/front/blog/{draft.slug || '…'}</span>
+              <div className="field" style={{ marginBottom: 14 }}>
+                <label htmlFor="post-resumen">Resumen</label>
+                <textarea id="post-resumen" rows={4} maxLength={3000} value={draft.resumen} onChange={(e) => change({ resumen: e.target.value })} placeholder="Objetivo, método, resultados principales y conclusión, en un párrafo. Aparece también en la lista del blog." />
               </div>
-              <div className="field">
-                <label htmlFor="post-autores">Autores</label>
-                <input id="post-autores" value={draft.autores} maxLength={300} placeholder="A. Pérez, B. Soto" onChange={(e) => change({ autores: e.target.value })} />
+              {post.proyecto?.tipo === 'expertos' && (
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={!draft.anonimizar} onChange={(e) => change({ anonimizar: !e.target.checked })} />
+                  Mostrar el nombre de los expertos (por defecto aparecen como «Experto 1», «Experto 2»…; el correo nunca se publica)
+                </label>
+              )}
+            </div>
+
+            <h2 className="post-editor-section">Texto</h2>
+            {draft.bloques.map((b, i) => (
+              <div key={b._k} className="card post-block">
+                <ItemBar list="bloques" i={i} label={`Sección ${i + 1}`} />
+                <div className="field">
+                  <textarea
+                    rows={Math.min(24, Math.max(4, b.markdown.split('\n').length + 1))}
+                    value={b.markdown}
+                    onChange={(e) => {
+                      lastText.current = { index: i, pos: e.target.selectionStart };
+                      updateItem('bloques', i)({ ...b, markdown: e.target.value });
+                    }}
+                    onSelect={(e) => { lastText.current = { index: i, pos: e.target.selectionStart }; }}
+                    placeholder="## Título de la sección&#10;&#10;Texto. Cita figuras con {{fig:f1}}."
+                    aria-label={`Sección ${i + 1}`}
+                  />
+                </div>
               </div>
-              <div className="field">
-                <label htmlFor="post-palabras">Palabras clave</label>
-                <input id="post-palabras" value={draft.palabras} placeholder="efectos olvidados, retail" onChange={(e) => change({ palabras: e.target.value })} />
-                <span className="hint">Separadas por comas (hasta 10).</span>
+            ))}
+            <div className="card">
+              <div className="controls" style={{ marginBottom: 0 }}>
+                <button type="button" onClick={() => setList('bloques', (bs) => [...bs, withKey({ tipo: 'texto', markdown: '## ' })])}>Agregar sección</button>
+                <details className="small">
+                  <summary className="muted">Formato del texto (Markdown)</summary>
+                  <table className="post-md-help">
+                    <tbody>
+                      <tr><td className="mono">## Título</td><td>título de sección (se numera solo)</td></tr>
+                      <tr><td className="mono">{'{{fig:f1}}'}</td><td>cita a una figura («Figura 1»)</td></tr>
+                      <tr><td className="mono">**negrita**, *cursiva*</td><td>énfasis</td></tr>
+                      <tr><td className="mono">- elemento</td><td>lista</td></tr>
+                      <tr><td className="mono">[texto](https://…)</td><td>enlace o referencia</td></tr>
+                      <tr><td className="mono">&gt; cita</td><td>cita textual</td></tr>
+                      <tr><td className="mono">| a | b |</td><td>tabla</td></tr>
+                    </tbody>
+                  </table>
+                </details>
               </div>
             </div>
-            <div className="field" style={{ marginBottom: 14 }}>
-              <label htmlFor="post-resumen">Resumen</label>
-              <textarea id="post-resumen" rows={4} maxLength={3000} value={draft.resumen} onChange={(e) => change({ resumen: e.target.value })} placeholder="Objetivo, método, resultados principales y conclusión, en un párrafo. Aparece también en la lista del blog." />
+
+            <div className="controls">
+              {published && <button type="button" onClick={onUnpublish} disabled={!!busy}>Retirar del blog</button>}
+              <button type="button" onClick={onDelete} disabled={!!busy}>Borrar publicación</button>
             </div>
-            {post.proyecto?.tipo === 'expertos' && (
-              <label className="checkbox-label">
-                <input type="checkbox" checked={!draft.anonimizar} onChange={(e) => change({ anonimizar: !e.target.checked })} />
-                Mostrar el nombre de los expertos (por defecto aparecen como «Experto 1», «Experto 2»…; el correo nunca se publica)
-              </label>
-            )}
           </div>
 
-          <h2 className="post-editor-section">Texto</h2>
-          {draft.bloques.map((b, i) => (
-            <div key={b._k} className="card post-block">
-              <ItemBar list="bloques" i={i} label={`Sección ${i + 1}`} />
-              <div className="field">
-                <textarea
-                  rows={Math.min(24, Math.max(4, b.markdown.split('\n').length + 1))}
-                  value={b.markdown}
-                  onChange={(e) => {
-                    lastText.current = { index: i, pos: e.target.selectionStart };
-                    updateItem('bloques', i)({ ...b, markdown: e.target.value });
-                  }}
-                  onSelect={(e) => { lastText.current = { index: i, pos: e.target.selectionStart }; }}
-                  placeholder="## Título de la sección&#10;&#10;Texto. Cita figuras con {{fig:f1}}."
-                  aria-label={`Sección ${i + 1}`}
+          <aside className="post-editor-side card" aria-label="Figuras">
+            <div className="chart-head" style={{ marginBottom: 6 }}>
+              <h2>Figuras</h2>
+              <button type="button" className="btn primary" onClick={() => setPicker(true)}>+ Agregar</button>
+            </div>
+            <p className="small muted" style={{ margin: '0 0 10px' }}>
+              Se publican solo las citadas en el texto y con permiso, numeradas por orden de cita. Pon el cursor en el texto y usa «Citar».
+            </p>
+            {!draft.figuras.length && <div className="empty">Sin figuras todavía.</div>}
+            <ul className="post-figlist">
+              {draft.figuras.map((f, i) => (
+                <FigureItem
+                  key={f._k}
+                  fig={f}
+                  job={jobsById[f.job_id]}
+                  loading={!jobs}
+                  cited={cited.has(f.ref)}
+                  first={i === 0}
+                  last={i === draft.figuras.length - 1}
+                  onEdit={() => setEditingKey(f._k)}
+                  onCite={() => cite(f.ref)}
+                  onMove={(d) => moveItem('figuras', i, d)}
+                  onRemove={() => window.confirm(`¿Quitar la figura «${f.ref}»? Sus citas en el texto quedarán sin figura.`) && removeItem('figuras', i)}
                 />
-              </div>
-            </div>
-          ))}
-          <div className="card">
-            <div className="controls" style={{ marginBottom: 0 }}>
-              <button type="button" onClick={() => setList('bloques', (bs) => [...bs, withKey({ tipo: 'texto', markdown: '## ' })])}>Agregar sección</button>
-              <details className="small">
-                <summary className="muted">Formato del texto (Markdown)</summary>
-                <table className="post-md-help">
-                  <tbody>
-                    <tr><td className="mono">## Título</td><td>título de sección (se numera solo)</td></tr>
-                    <tr><td className="mono">{'{{fig:f1}}'}</td><td>cita a una figura («Figura 1»)</td></tr>
-                    <tr><td className="mono">**negrita**, *cursiva*</td><td>énfasis</td></tr>
-                    <tr><td className="mono">- elemento</td><td>lista</td></tr>
-                    <tr><td className="mono">[texto](https://…)</td><td>enlace o referencia</td></tr>
-                    <tr><td className="mono">&gt; cita</td><td>cita textual</td></tr>
-                    <tr><td className="mono">| a | b |</td><td>tabla</td></tr>
-                  </tbody>
-                </table>
-              </details>
-            </div>
-          </div>
+              ))}
+            </ul>
+          </aside>
+        </div>
+      )}
 
-          <h2 className="post-editor-section">Figuras y datos</h2>
-          <p className="sub" style={{ margin: 0 }}>
-            Las figuras se muestran en la barra lateral, numeradas en el orden en que el texto las cita. Una figura se publica solo si
-            está citada y tiene permiso; los datos crudos se descargan solo con su permiso.
-          </p>
-          {draft.figuras.map((f, i) => (
-            <div key={f._k} className="card post-block">
-              <ItemBar list="figuras" i={i} label={`Figura «${f.ref}»`} />
-              {jobs
-                ? <FigureEditor fig={f} job={jobsById[f.job_id]} cited={cited.has(f.ref)} onChange={updateItem('figuras', i)} onCite={() => cite(f.ref)} />
-                : <p className="small muted">Cargando el cálculo {f.job_id}…</p>}
-            </div>
-          ))}
-          {picker ? (
-            <div className="card">
-              <CalcPicker
-                jobs={jobs || []}
-                scope={post.proyecto ? `Cálculos del proyecto «${post.proyecto.nombre}».` : 'Cálculos que puedes ver.'}
-                onClose={() => setPicker(false)}
-                onPick={(j) => {
-                  setList('figuras', (fs) => [...fs, withKey({ ref: nextRef(fs), job_id: j.job_id, vista: DEFAULT_VIEW[j.kind], publico: false })]);
-                  setPicker(false);
-                }}
-              />
-            </div>
-          ) : (
-            <div className="card">
-              <button type="button" className="btn" onClick={() => setPicker(true)}>Agregar figura de un cálculo</button>
-            </div>
-          )}
-
-          <div className="controls">
-            {published && <button type="button" onClick={onUnpublish} disabled={!!busy}>Retirar del blog</button>}
-            <button type="button" onClick={onDelete} disabled={!!busy}>Borrar publicación</button>
-          </div>
-        </>
+      {picker && (
+        <Modal title="Agregar una figura" onClose={() => setPicker(false)}>
+          <CalcPicker
+            jobs={jobs || []}
+            scope={post.proyecto ? `Cálculos del proyecto «${post.proyecto.nombre}».` : 'Cálculos que puedes ver.'}
+            onPick={(j) => {
+              const fig = withKey({ ref: nextRef(draft.figuras), job_id: j.job_id, vista: DEFAULT_VIEW[j.kind], publico: false });
+              setList('figuras', (fs) => [...fs, fig]);
+              setPicker(false);
+              setEditingKey(fig._k); // sigue en el modal para elegir vista y permisos
+            }}
+          />
+        </Modal>
+      )}
+      {editingFigure && (
+        <Modal title={`Figura «${editingFigure.fig.ref}»`} onClose={() => setEditingKey(null)}>
+          <FigureEditor
+            fig={editingFigure.fig}
+            job={jobsById[editingFigure.fig.job_id]}
+            cited={cited.has(editingFigure.fig.ref)}
+            onChange={updateItem('figuras', editingFigure.index)}
+            onCite={() => cite(editingFigure.fig.ref)}
+          />
+          {jobsById[editingFigure.fig.job_id] && <FigurePreview postId={postId} fig={editingFigure.fig} />}
+        </Modal>
       )}
     </div>
   );

@@ -145,7 +145,7 @@ def test_template_is_a_scientific_article(env) -> None:
     # El último cálculo queda como figura citada, pero sin permiso de publicación.
     assert post["figuras"] == [{
         "ref": "f1", "job_id": "501", "vista": "sankey", "top": 50, "escala": "lineal", "pie": "",
-        "publico": False, "descargar_entradas": False, "descargar_resultados": False,
+        "publico": False, "descargar_entradas": False, "descargar_resultados": False, "en_cuerpo": False,
     }]
     assert post["url"] == "http://testserver/front/blog/retail"
     res = client.post(f"/app/posts/{post['id']}/publish")
@@ -172,7 +172,7 @@ def test_publish_snapshot_and_public_read(env) -> None:
         "figuras": [
             _fig("sk", "501", "sankey", orden=2, origen="a", top=5, pie="Desde la causa a",
                  descargar_resultados=True, descargar_entradas=True),
-            _fig("hive", "501", "hive"),
+            _fig("hive", "501", "hive", en_cuerpo=True),
             _fig("oculta", "501", "tabla"),  # con permiso pero sin cita: no se publica
             _fig("privada", "501", "tabla", publico=False),
         ],
@@ -209,6 +209,7 @@ def test_publish_snapshot_and_public_read(env) -> None:
     hive, sankey = data["figuras"]
     assert (hive["numero"], hive["ref"], sankey["numero"], sankey["ref"]) == (1, "hive", 2, "sk")
     assert hive["descargas"] == [] and sankey["descargas"] == ["entradas", "resultados"]
+    assert hive["en_cuerpo"] is True and sankey["en_cuerpo"] is False
     # El gráfico recibe solo lo que dibuja: origen filtrado, ordenado por Mean, sin Count ni SD.
     table = sankey["datos"]["tables"][0]
     assert sankey["orden"] == 2 and sankey["origen"] == "a" and sankey["pie"] == "Desde la causa a"
@@ -342,3 +343,17 @@ def test_access_follows_project_membership(env) -> None:
     assert client.post("/app/posts", json={"titulo": "Otra", "project_id": project["id"]}).status_code == 201
     assert {p["titulo"] for p in client.get("/app/posts").json()} == {"Del proyecto", "Mía", "Otra"}
     assert client.delete(f"/app/posts/{post['id']}").status_code == 204
+
+
+def test_figure_preview_in_editor(env) -> None:
+    client = env["client"]
+    project, _ = _expert_project(env)
+    post = client.post("/app/posts", json={"titulo": "P", "project_id": project["id"], "plantilla": False}).json()
+    # La figura aún no está guardada ni tiene permiso: el editor la previsualiza igual.
+    res = client.post(f"/app/posts/{post['id']}/figure-preview", json=_fig("x", "501", "tabla", publico=False, top=5))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["kind"] == "fe" and body["datos"]["tables"][0]["total"] == 3
+    assert client.post(f"/app/posts/{post['id']}/figure-preview", json=_fig("x", "999", "tabla")).status_code == 422
+    client.cookies.clear()
+    assert client.post(f"/app/posts/{post['id']}/figure-preview", json=_fig("x", "501", "tabla")).status_code == 401

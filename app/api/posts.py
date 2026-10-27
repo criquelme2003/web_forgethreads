@@ -14,6 +14,9 @@ Al publicar se guarda una instantánea con los datos de cada figura ya resueltos
 lee en `/app/blog` sin sesión, aunque el cluster no responda, y no ve los cambios del borrador
 hasta que se vuelve a publicar (RF-57).
 
+Opcionalmente (`en_cuerpo`), una figura también se muestra en el texto, bajo la sección donde se
+cita por primera vez. La vista pública se puede imprimir o guardar como PDF desde el navegador.
+
 Acceso: una publicación de un proyecto la editan sus admins (dueño y co-admins); una sin
 proyecto, su autor. El superadmin edita todas. Para las demás se responde 404.
 """
@@ -107,6 +110,7 @@ class Figure(BaseModel):
     publico: bool = Field(default=False, description="Permiso para mostrar el gráfico en la publicación")
     descargar_entradas: bool = False
     descargar_resultados: bool = False
+    en_cuerpo: bool = Field(default=False, description="Mostrarla también en el texto, bajo la sección de su primera cita")
 
 
 class PostCreate(BaseModel):
@@ -399,7 +403,9 @@ class _Renderer:
             numero = len(out_figures) + 1
             view, record = await self.figure(fig)
             downloads = [d for d in DOWNLOADS if getattr(fig, f"descargar_{d}")]
-            out_figures.append({**view, "numero": numero, "ref": ref, "descargas": downloads})
+            out_figures.append(
+                {**view, "numero": numero, "ref": ref, "descargas": downloads, "en_cuerpo": fig.en_cuerpo}
+            )
             if downloads:
                 labels = await self.expert_labels(record.project_id)
                 private[str(numero)] = {
@@ -643,6 +649,18 @@ async def preview_post(
     renderer = _Renderer(post, project, user, store, projects, settings, pool)
     view = await renderer.render()
     return _public(post, view, None, renderer.errores + renderer.avisos)
+
+
+@router.post("/app/posts/{post_id}/figure-preview")
+async def preview_figure(
+    post_id: int, body: Figure, user: CurrentUser, posts: Posts, projects: Projects, store: Jobs,
+    settings: SettingsDep, pool: Pool,
+) -> dict:
+    """Una figura del borrador (aún sin guardar) tal como se verá, para el editor."""
+    post, project = await _editable_post(post_id, user, posts, projects)
+    renderer = _Renderer(post, project, user, store, projects, settings, pool)
+    view, _ = await renderer.figure(body)
+    return {**view, "numero": 0, "ref": body.ref, "descargas": [], "en_cuerpo": body.en_cuerpo}
 
 
 @router.post("/app/posts/{post_id}/publish", response_model=PostOut)

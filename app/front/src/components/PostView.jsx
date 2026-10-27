@@ -223,28 +223,60 @@ function Downloads({ b, slug }) {
   );
 }
 
-/** Figura en la barra lateral; «Ampliar» la muestra a todo el ancho. */
-function SideFigure({ b, slug, highlighted, onExpand }) {
+/**
+ * Figura en la lista de la barra lateral: cerrada muestra solo su número y título; abierta, el
+ * gráfico compacto, la leyenda y las descargas. «Ampliar» la muestra a todo el ancho.
+ */
+function SideFigure({ b, slug, open, highlighted, onToggle, onExpand }) {
   const [logY, setLogY] = useState(false);
   const howKey = b.kind === 'sweep' && b.vista === 'tabla' ? 'sweep_tabla' : b.vista;
   return (
-    <figure id={`figura-${b.numero}`} className={`post-figure${highlighted ? ' is-highlighted' : ''}`}>
-      <div className="post-figure-head">
+    <li id={`figura-${b.numero}`} className={`post-figure${open ? ' is-open' : ''}${highlighted ? ' is-highlighted' : ''}`}>
+      <button type="button" className="post-figure-toggle" aria-expanded={open} onClick={onToggle}>
         <span className="post-figure-num">Figura {b.numero}</span>
-        <button type="button" className="link-btn small" onClick={() => onExpand(b)}>Ampliar</button>
-      </div>
+        <span className="post-figure-title">{calcTitle(b)}</span>
+        <span className="post-figure-chevron" aria-hidden="true">{open ? '−' : '+'}</span>
+      </button>
+      {open && (
+        <div className="post-figure-body">
+          <CalcMeta b={b} />
+          {b.kind === 'sweep' && b.vista !== 'tabla' && (
+            <label className="checkbox-label"><input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} /> Eje vertical logarítmico</label>
+          )}
+          <details className="post-howto">
+            <summary>¿Cómo leer este gráfico?</summary>
+            <p>{HOW_TO_READ[howKey]}</p>
+          </details>
+          <div className="post-figure-chart"><FigureChart b={b} logY={logY} compact /></div>
+          {b.pie && <figcaption><strong>Figura {b.numero}.</strong> {b.pie}</figcaption>}
+          <div className="post-figure-actions">
+            <button type="button" className="btn" onClick={() => onExpand(b)}>⤢ Ampliar</button>
+            <Downloads b={b} slug={slug} />
+          </div>
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** Figura a todo el ancho: en el cuerpo del texto, en la versión para imprimir y en el editor. */
+export function FigureBlock({ b, className = '' }) {
+  const [logY, setLogY] = useState(false);
+  const howKey = b.kind === 'sweep' && b.vista === 'tabla' ? 'sweep_tabla' : b.vista;
+  return (
+    <figure className={`post-figure-block ${className}`}>
+      {b.numero > 0 && <span className="post-figure-num">Figura {b.numero}</span>}
       <h3>{calcTitle(b)}</h3>
       <CalcMeta b={b} />
       {b.kind === 'sweep' && b.vista !== 'tabla' && (
-        <label className="checkbox-label"><input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} /> Eje vertical logarítmico</label>
+        <label className="checkbox-label no-print"><input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} /> Eje vertical logarítmico</label>
       )}
-      <details className="post-howto">
+      <details className="post-howto no-print">
         <summary>¿Cómo leer este gráfico?</summary>
         <p>{HOW_TO_READ[howKey]}</p>
       </details>
-      <div className="post-figure-chart"><FigureChart b={b} logY={logY} compact /></div>
-      {b.pie && <figcaption><strong>Figura {b.numero}.</strong> {b.pie}</figcaption>}
-      <Downloads b={b} slug={slug} />
+      <FigureChart b={b} logY={logY} />
+      {b.pie && <figcaption>{b.numero > 0 && <strong>Figura {b.numero}. </strong>}{b.pie}</figcaption>}
     </figure>
   );
 }
@@ -278,9 +310,11 @@ function ExpandedFigure({ b, onClose }) {
 function ProjectFacts({ f }) {
   const expert = f.tipo === 'expertos';
   return (
-    <section className="post-side-card">
-      <div className="post-side-title">Proyecto</div>
-      <div className="post-side-name">{f.nombre}</div>
+    <details className="post-side-card">
+      <summary>
+        <span className="post-side-title">Proyecto</span>
+        <span className="post-side-name">{f.nombre}</span>
+      </summary>
       <div className="small muted">{TIPO_PROYECTO[f.tipo] || f.tipo}</div>
       <dl className="post-facts">
         {expert && <><dt>Expertos consultados</dt><dd>{f.expertos}</dd></>}
@@ -296,7 +330,7 @@ function ProjectFacts({ f }) {
           <div className="labels">{f.efectos.map((l) => <span key={l} className="pill">{l}</span>)}</div>
         </>
       )}
-    </section>
+    </details>
   );
 }
 
@@ -308,10 +342,10 @@ function Params({ p }) {
   if (p.reps?.length) items.push(['Repeticiones', p.reps.map(formatCount).join(' · ')]);
   if (!items.length) return null;
   return (
-    <section className="post-side-card">
-      <div className="post-side-title">Parámetros de los cálculos</div>
+    <details className="post-side-card">
+      <summary><span className="post-side-title">Parámetros de los cálculos</span></summary>
       <dl className="post-facts">{items.flatMap(([k, v]) => [<dt key={`${k}-t`}>{k}</dt>, <dd key={`${k}-d`}>{v}</dd>])}</dl>
-    </section>
+    </details>
   );
 }
 
@@ -325,19 +359,47 @@ function withCitations(markdown, numbers) {
 export default function PostView({ post }) {
   const [expanded, setExpanded] = useState(null);
   const [highlight, setHighlight] = useState(null);
+  const [open, setOpen] = useState(null); // número de la figura desplegada en la lista
+  const [printing, setPrinting] = useState(false);
   const numbers = useMemo(() => Object.fromEntries(post.figuras.map((f) => [f.ref, f.numero])), [post.figuras]);
   const slug = post.publicado_at ? post.slug : null;
   const year = new Date(post.publicado_at || Date.now()).getFullYear();
   const downloadable = post.figuras.filter((f) => f.descargas?.length);
+  // Figuras «en el cuerpo»: van bajo la sección donde se citan por primera vez.
+  const inline = useMemo(() => {
+    const bySection = {};
+    for (const f of post.figuras.filter((x) => x.en_cuerpo)) {
+      const i = post.bloques.findIndex((b) => b.markdown.includes(`{{fig:${f.ref}}}`));
+      if (i >= 0) (bySection[i] ||= []).push(f);
+    }
+    return bySection;
+  }, [post]);
+  const inlineRefs = new Set(Object.values(inline).flat().map((f) => f.ref));
 
-  // Clic en una cita: lleva a la figura de la barra lateral y la resalta un momento.
+  // PDF: se arma la versión para imprimir (todas las figuras, sin la interfaz) y se abre el
+  // diálogo de impresión del navegador, donde se elige «Guardar como PDF».
+  useEffect(() => {
+    if (!printing) return undefined;
+    const done = () => setPrinting(false);
+    window.addEventListener('afterprint', done);
+    const t = setTimeout(() => window.print(), 400); // los gráficos miden su ancho al montarse
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('afterprint', done);
+    };
+  }, [printing]);
+
+  // Clic en una cita: despliega esa figura en la lista lateral, la deja a la vista y la resalta.
   function onClick(e) {
     const a = e.target.closest('a[href^="#figura-"]');
     if (!a) return;
     e.preventDefault();
     const n = Number(a.getAttribute('href').slice('#figura-'.length));
-    document.getElementById(`figura-${n}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setOpen(n);
     setHighlight(n);
+    setTimeout(() => {
+      document.getElementById(`figura-${n}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 0);
     setTimeout(() => setHighlight(null), 1600);
   }
 
@@ -352,7 +414,12 @@ export default function PostView({ post }) {
           {post.proyecto && <div className="post-kicker">{TIPO_PROYECTO[post.proyecto.tipo] || post.proyecto.tipo} · {post.proyecto.nombre}</div>}
           <h1 className="post-title">{post.titulo}</h1>
           {post.autores && <div className="post-authors">{post.autores}</div>}
-          <div className="post-byline">{post.publicado_at ? `Publicado el ${fmtDay(post.publicado_at)}` : 'Vista previa (sin publicar)'}</div>
+          <div className="post-byline">
+            {post.publicado_at ? `Publicado el ${fmtDay(post.publicado_at)}` : 'Vista previa (sin publicar)'}
+            <button type="button" className="btn post-pdf no-print" onClick={() => setPrinting(true)} disabled={printing}>
+              {printing ? 'Preparando…' : '↓ Descargar PDF'}
+            </button>
+          </div>
         </header>
         {post.resumen && (
           <section className="post-abstract">
@@ -363,11 +430,17 @@ export default function PostView({ post }) {
         )}
         <div className="prose post-body">
           {post.bloques.map((b, i) => (
-            b.markdown.trim()
-              ? <Markdown key={i} remarkPlugins={[remarkGfm]} components={{ a: markdownLink }}>{withCitations(b.markdown, numbers)}</Markdown>
-              : null
+            <div key={i} className="post-section">
+              {b.markdown.trim() && <Markdown remarkPlugins={[remarkGfm]} components={{ a: markdownLink }}>{withCitations(b.markdown, numbers)}</Markdown>}
+              {(inline[i] || []).map((f) => <FigureBlock key={f.ref} b={f} className="post-inline-figure" />)}
+            </div>
           ))}
         </div>
+        {printing && (
+          <section className="post-print-figures" aria-hidden="true">
+            {post.figuras.filter((f) => !inlineRefs.has(f.ref)).map((f) => <FigureBlock key={f.ref} b={f} />)}
+          </section>
+        )}
         {downloadable.length > 0 && (
           <section className="post-availability">
             <h2>Disponibilidad de datos</h2>
@@ -385,10 +458,24 @@ export default function PostView({ post }) {
       <aside className="post-side" aria-label="Figuras y datos">
         {post.ficha && <ProjectFacts f={post.ficha} />}
         <Params p={post.parametros} />
-        {post.figuras.length > 0 && <div className="post-side-title">Figuras</div>}
-        {post.figuras.map((b) => (
-          <SideFigure key={b.numero} b={b} slug={slug} highlighted={highlight === b.numero} onExpand={setExpanded} />
-        ))}
+        {post.figuras.length > 0 && (
+          <section>
+            <div className="post-side-title" style={{ marginBottom: 8 }}>Figuras ({post.figuras.length})</div>
+            <ol className="post-figlist-public">
+              {post.figuras.map((b) => (
+                <SideFigure
+                  key={b.numero}
+                  b={b}
+                  slug={slug}
+                  open={open === b.numero}
+                  highlighted={highlight === b.numero}
+                  onToggle={() => setOpen(open === b.numero ? null : b.numero)}
+                  onExpand={setExpanded}
+                />
+              ))}
+            </ol>
+          </section>
+        )}
       </aside>
       {expanded && <ExpandedFigure b={expanded} onClose={() => setExpanded(null)} />}
     </div>
