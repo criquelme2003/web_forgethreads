@@ -26,8 +26,9 @@ export default function App() {
         <Route path="/activate/:token" element={<Activate />} />
         <Route element={<Layout />}>
           <Route path="/projects" element={<Projects />} />
-          <Route path="/projects/:projectId" element={<ProjectDetail />} />
           <Route path="/projects/:projectId/compare" element={<FeCompare />} />
+          {/* Vistas del proyecto: portada (sin :tab), cálculos individuales ("individual") y por lote ("lote"). */}
+          <Route path="/projects/:projectId/:tab?" element={<ProjectDetail />} />
           <Route path="/users" element={<Users />} />
           {/* MaxMin ahora se lanza dentro de un proyecto de simulación. */}
           <Route path="/parameters" element={<Navigate to="/projects" replace />} />

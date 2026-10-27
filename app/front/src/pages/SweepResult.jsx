@@ -140,7 +140,7 @@ export default function SweepResult() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
           <h1>Barrido · job <span className="mono">{job.job_id}</span></h1>
-          {job.project_id != null && <Link to={`/projects/${job.project_id}`} className="small muted">← proyecto</Link>}
+          {job.project_id != null && <Link to={`/projects/${job.project_id}/lote`} className="small muted">← barridos</Link>}
         </div>
         <div className="kv">
           <span>Estado</span><span><span className={`badge ${job.status}`}>{job.status === 'partial' ? 'parcial' : job.status}</span></span>

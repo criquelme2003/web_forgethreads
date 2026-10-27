@@ -51,6 +51,7 @@ uv run uvicorn app.main:app --reload            # servidor local
 
 ### Proyectos
 
+- Vistas del proyecto en el SPA (RF-61): `/front/projects/<id>` (portada: datos, resumen, pasos, admins e invitaciones), `/individual` (por experto o MaxMin individual) y `/lote` (agregados o barridos).
 - Tipos `expertos` (estados `borrador → abierto → cerrado`, reabrible) y `simulacion` (`abierto ↔ cerrado`). Las etiquetas solo se editan en `borrador`. El proyecto no tiene `thr` ni `maxorder`: se indican en cada lanzamiento.
 - Los cálculos de un proyecto son filas de `jobs` con `project_id` (e `input_id` si vienen de un experto). `POST /app/execute_maxmin` exige `project_id` de un proyecto de simulación abierto.
 - Invitaciones (correo y nombre opcional del experto): solo se guarda el hash del token; el enlace (`/front/invite/<token>`) se muestra al crear, regenerar o reenviar por lotes (`/invitations/resend`, a quienes no han respondido; regenera cada token). Con `INVITATION_DELIVERY=smtp` además se envía por correo (puerto 465 = SSL implícito). Solo se elimina a un experto sin input; al resto se lo excluye.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { apiJson, fetchMe, send } from '../api.js';
 import LinkBox from '../components/LinkBox.jsx';
 import { errorText } from '../components/MatricesInput.jsx';
@@ -474,11 +474,35 @@ function expertLabel(e) {
   return e.nombre || e.email;
 }
 
-/** Cálculo agregado de los inputs no excluidos, lista de agregados y elección de expertos a comparar. */
-function JointAnalysis({ project, inputs, refreshKey }) {
-  const navigate = useNavigate();
+/** Jobs del proyecto de un tipo, consultados de nuevo cada 5 s mientras alguno está pendiente. */
+function useProjectJobs(projectId, filter, refreshKey) {
   const [jobs, setJobs] = useState(null);
+  useEffect(() => {
+    let timer;
+    let cancelled = false;
+    async function poll() {
+      const { ok, data } = await send(`/app/projects/${projectId}/jobs`, 'GET').catch(() => ({}));
+      if (cancelled) return;
+      const mine = ok ? data.filter(filter) : null;
+      if (mine) setJobs(mine);
+      if (!mine || mine.some((j) => j.status === 'pending')) timer = setTimeout(poll, POLL_MS);
+    }
+    poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // `filter` es una función fija de cada vista.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, refreshKey]);
+  return jobs;
+}
+
+/** Cálculo agregado de los inputs no excluidos (k ≥ 2, con bootstrap) y su lista (RF-24, RF-25). */
+function Aggregates({ project }) {
+  const [inputs, setInputs] = useState(null);
   const [pollKey, setPollKey] = useState(0);
+  const jobs = useProjectJobs(project.id, (j) => j.kind === 'fe' && j.expertos, pollKey);
   const [thr, setThr] = useState('0.5');
   const [maxorder, setMaxorder] = useState('3');
   const [reps, setReps] = useState('1000');
@@ -486,33 +510,15 @@ function JointAnalysis({ project, inputs, refreshKey }) {
   const [nodeOptions, setNodeOptions] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState({ text: '', kind: 'muted' });
-  const [chosen, setChosen] = useState(() => new Set());
 
   useEffect(() => {
     apiJson('/app/nodes/available')
       .then((data) => setNodeOptions(Array.isArray(data.options) ? data.options : []))
       .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    let timer;
-    let cancelled = false;
-    async function poll() {
-      const { ok, data } = await send(`/app/projects/${project.id}/jobs`, 'GET').catch(() => ({}));
-      if (cancelled) return;
-      if (ok) setJobs(data.filter((j) => j.kind === 'fe'));
-      if (!ok || data.some((j) => j.kind === 'fe' && j.status === 'pending')) timer = setTimeout(poll, POLL_MS);
-    }
-    poll();
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [project.id, refreshKey, pollKey]);
+    send(`/app/projects/${project.id}/inputs`, 'GET').then(({ ok, data }) => ok && setInputs(data)).catch(() => {});
+  }, [project.id]);
 
   const included = (inputs || []).filter((i) => !i.excluido);
-  const aggregates = (jobs || []).filter((j) => j.expertos);
-  const comparable = (jobs || []).filter((j) => j.experto && j.status === 'success');
 
   async function launch(e) {
     e.preventDefault();
@@ -530,6 +536,94 @@ function JointAnalysis({ project, inputs, refreshKey }) {
     return undefined;
   }
 
+  return (
+    <>
+      <div className="card">
+        <h2>Nuevo cálculo agregado</h2>
+        <p className="sub">
+          Apila los inputs no excluidos (k ≥ 2) y aplica el bootstrap de forgeffects con las repeticiones que indiques:
+          el resultado trae Count, Mean y SD por camino. Los inputs se excluyen o incluyen en la pestaña{' '}
+          <Link to={`/projects/${project.id}/individual`}>Por experto</Link>.
+        </p>
+        <form className="compute-form" onSubmit={launch} noValidate>
+          <div className="grid-3">
+            <div className="field">
+              <label htmlFor="agg-thr">THR</label>
+              <input id="agg-thr" inputMode="decimal" value={thr} onChange={(e) => setThr(e.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="agg-maxorder">Orden máximo</label>
+              <input id="agg-maxorder" type="number" min="2" max="10" step="1" value={maxorder} onChange={(e) => setMaxorder(e.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="agg-reps">Repeticiones (bootstrap)</label>
+              <input id="agg-reps" type="number" min="1" step="1" value={reps} onChange={(e) => setReps(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid-3">
+            <div className="field">
+              <label htmlFor="agg-nodo">Nodo</label>
+              <select id="agg-nodo" value={nodo} onChange={(e) => setNodo(e.target.value)}>
+                <option value="">Automático</option>
+                {nodeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="actions">
+            <button type="submit" className="btn-primary" disabled={busy || included.length < 2}>
+              {busy ? 'Lanzando…' : `Calcular agregado de ${included.length} expertos`}
+            </button>
+            <span className={`status ${msg.kind} small`} role="status" aria-live="polite">
+              {msg.text || (inputs === null ? '' : included.length < 2 ? 'Hacen falta al menos 2 inputs no excluidos.' : included.map(expertName).join(', '))}
+            </span>
+          </div>
+        </form>
+      </div>
+
+      <div className="card">
+        <h2 style={{ marginBottom: 10 }}>Cálculos agregados</h2>
+        <div style={{ overflow: 'auto' }}>
+          <table>
+            <thead><tr><th>Job</th><th>Estado</th><th>THR</th><th>Orden</th><th>Reps</th><th>Expertos</th><th>Creado</th></tr></thead>
+            <tbody>
+              {jobs === null && <tr><td colSpan="7" className="empty">Cargando…</td></tr>}
+              {jobs !== null && jobs.length === 0 && <tr><td colSpan="7" className="empty">Sin cálculos agregados</td></tr>}
+              {(jobs || []).map((j) => {
+                const p = j.params || {};
+                const outdated = j.expertos.some((e) => e.input_version < e.version_vigente);
+                return (
+                  <tr key={j.job_id}>
+                    <td className="mono"><Link to={`/fe/jobs/${j.job_id}`}>{j.job_id}</Link></td>
+                    <td><span className={`badge ${jobBadge(j.status)}`}>{j.status}</span></td>
+                    <td>{p.thr ?? '—'}</td>
+                    <td>{p.maxorder ?? '—'}</td>
+                    <td>{p.reps ?? '—'}</td>
+                    <td className="small">
+                      {j.expertos.length}: {j.expertos.map(expertLabel).join(', ')}
+                      {outdated && <>{' '}<span className="badge outdated" title="Algún experto modificó su input después de este cálculo">input modificado</span></>}
+                    </td>
+                    <td className="small">{fmtDate(j.created_at)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Elección de un cálculo terminado por experto para compararlos lado a lado (RF-26). */
+function ExpertCompare({ project, inputs }) {
+  const navigate = useNavigate();
+  const [chosen, setChosen] = useState(() => new Set());
+  const comparable = (inputs || []).flatMap((item) => item.calculos
+    .filter((c) => c.status === 'success')
+    .map((c) => ({ ...c, inputId: item.id, name: item.nombre || item.email || `input ${item.id}` })));
+  const chosenCalcs = comparable.filter((c) => chosen.has(c.job_id));
+  const repeatedExpert = new Set(chosenCalcs.map((c) => c.inputId)).size < chosenCalcs.length;
+
   function toggle(jobId) {
     setChosen((prev) => {
       const next = new Set(prev);
@@ -539,91 +633,21 @@ function JointAnalysis({ project, inputs, refreshKey }) {
     });
   }
 
-  const chosenJobs = comparable.filter((j) => chosen.has(j.job_id));
-  const repeatedExpert = new Set(chosenJobs.map((j) => j.experto.input_id)).size < chosenJobs.length;
-
   return (
     <div className="card">
-      <h2>Análisis conjunto</h2>
-      <p className="sub">
-        El cálculo agregado apila los inputs no excluidos (k ≥ 2) y aplica el bootstrap: el resultado trae Count, Mean y SD.
-        Para comparar expertos, elige un cálculo por experto entre los terminados.
-      </p>
-      <form className="compute-form" onSubmit={launch} noValidate>
-        <div className="grid-3">
-          <div className="field">
-            <label htmlFor="agg-thr">THR</label>
-            <input id="agg-thr" inputMode="decimal" value={thr} onChange={(e) => setThr(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="agg-maxorder">Orden máximo</label>
-            <input id="agg-maxorder" type="number" min="2" max="10" step="1" value={maxorder} onChange={(e) => setMaxorder(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="agg-reps">Repeticiones (bootstrap)</label>
-            <input id="agg-reps" type="number" min="1" step="1" value={reps} onChange={(e) => setReps(e.target.value)} />
-          </div>
-        </div>
-        <div className="grid-3">
-          <div className="field">
-            <label htmlFor="agg-nodo">Nodo</label>
-            <select id="agg-nodo" value={nodo} onChange={(e) => setNodo(e.target.value)}>
-              <option value="">Automático</option>
-              {nodeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="actions">
-          <button type="submit" className="btn-primary" disabled={busy || included.length < 2}>
-            {busy ? 'Lanzando…' : `Calcular agregado de ${included.length} expertos`}
-          </button>
-          <span className={`status ${msg.kind} small`} role="status" aria-live="polite">
-            {msg.text || (included.length < 2 ? 'Hacen falta al menos 2 inputs no excluidos.' : included.map(expertName).join(', '))}
-          </span>
-        </div>
-      </form>
-
-      <h2 style={{ margin: '6px 0 8px', fontSize: 14 }}>Cálculos agregados</h2>
-      <div style={{ overflow: 'auto' }}>
-        <table>
-          <thead><tr><th>Job</th><th>Estado</th><th>THR</th><th>Orden</th><th>Reps</th><th>Expertos</th><th>Creado</th></tr></thead>
-          <tbody>
-            {jobs === null && <tr><td colSpan="7" className="empty">Cargando…</td></tr>}
-            {jobs !== null && aggregates.length === 0 && <tr><td colSpan="7" className="empty">Sin cálculos agregados</td></tr>}
-            {aggregates.map((j) => {
-              const p = j.params || {};
-              const outdated = j.expertos.some((e) => e.input_version < e.version_vigente);
-              return (
-                <tr key={j.job_id}>
-                  <td className="mono"><Link to={`/fe/jobs/${j.job_id}`}>{j.job_id}</Link></td>
-                  <td><span className={`badge ${jobBadge(j.status)}`}>{j.status}</span></td>
-                  <td>{p.thr ?? '—'}</td>
-                  <td>{p.maxorder ?? '—'}</td>
-                  <td>{p.reps ?? '—'}</td>
-                  <td className="small">
-                    {j.expertos.length}: {j.expertos.map(expertLabel).join(', ')}
-                    {outdated && <>{' '}<span className="badge outdated" title="Algún experto modificó su input después de este cálculo">input modificado</span></>}
-                  </td>
-                  <td className="small">{fmtDate(j.created_at)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <h2 style={{ margin: '18px 0 8px', fontSize: 14 }}>Comparar expertos</h2>
+      <h2>Comparar expertos</h2>
+      <p className="sub">Elige un cálculo terminado por experto para ver sus Sankeys lado a lado y una tabla de caminos con una columna por experto.</p>
       {comparable.length < 2 ? (
         <p className="small muted">Se necesitan al menos dos cálculos por experto terminados.</p>
       ) : (
         <>
           <div className="calc-list" style={{ maxHeight: 240, overflow: 'auto' }}>
-            {comparable.map((j) => (
-              <label key={j.job_id} className="checkbox-label">
-                <input type="checkbox" checked={chosen.has(j.job_id)} onChange={() => toggle(j.job_id)} />
+            {comparable.map((c) => (
+              <label key={c.job_id} className="checkbox-label">
+                <input type="checkbox" checked={chosen.has(c.job_id)} onChange={() => toggle(c.job_id)} />
                 <span>
-                  <strong style={{ color: 'var(--text)' }}>{expertLabel(j.experto)}</strong>
-                  {' '}· THR {j.params?.thr} · orden {j.params?.maxorder} · v{j.experto.input_version} · job <span className="mono">{j.job_id}</span>
+                  <strong style={{ color: 'var(--text)' }}>{c.name}</strong>
+                  {' '}· THR {c.thr ?? '—'} · orden {c.maxorder ?? '—'} · v{c.input_version} · job <span className="mono">{c.job_id}</span>
                 </span>
               </label>
             ))}
@@ -632,10 +656,10 @@ function JointAnalysis({ project, inputs, refreshKey }) {
             <button
               type="button"
               className="btn-primary"
-              disabled={chosenJobs.length < 2 || repeatedExpert}
-              onClick={() => navigate(`/projects/${project.id}/compare?jobs=${chosenJobs.map((j) => j.job_id).join(',')}`)}
+              disabled={chosenCalcs.length < 2 || repeatedExpert}
+              onClick={() => navigate(`/projects/${project.id}/compare?jobs=${chosenCalcs.map((c) => c.job_id).join(',')}`)}
             >
-              Comparar {chosenJobs.length || ''} cálculos
+              Comparar {chosenCalcs.length || ''} cálculos
             </button>
             {repeatedExpert && <span className="status err small">Elige un solo cálculo por experto.</span>}
           </div>
@@ -716,30 +740,9 @@ function ProjectAdmins({ project, me, onChanged }) {
 
 // --- simulación --------------------------------------------------------------------------------
 
-function SimulationJobs({ project, refreshKey }) {
-  const [jobs, setJobs] = useState(null);
-
-  useEffect(() => {
-    let timer;
-    let cancelled = false;
-    async function poll() {
-      const { ok, data } = await send(`/app/projects/${project.id}/jobs`, 'GET').catch(() => ({}));
-      if (cancelled) return;
-      if (ok) setJobs(data);
-      if (!ok || data.some((j) => j.status === 'pending')) timer = setTimeout(poll, POLL_MS);
-    }
-    poll();
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [project.id, refreshKey]);
-
-  const maxmin = jobs && jobs.filter((j) => j.kind === 'maxmin');
-  const sweeps = jobs && jobs.filter((j) => j.kind === 'sweep');
-
+function SweepJobs({ project, refreshKey }) {
+  const sweeps = useProjectJobs(project.id, (j) => j.kind === 'sweep', refreshKey);
   return (
-    <>
     <div className="card">
       <h2 style={{ marginBottom: 10 }}>Barridos</h2>
       <div style={{ overflow: 'auto' }}>
@@ -770,6 +773,12 @@ function SimulationJobs({ project, refreshKey }) {
         </table>
       </div>
     </div>
+  );
+}
+
+function MaxMinJobs({ project, refreshKey }) {
+  const maxmin = useProjectJobs(project.id, (j) => j.kind === 'maxmin', refreshKey);
+  return (
     <div className="card">
       <h2 style={{ marginBottom: 10 }}>Cálculos MaxMin</h2>
       <div style={{ overflow: 'auto' }}>
@@ -799,23 +808,163 @@ function SimulationJobs({ project, refreshKey }) {
         </table>
       </div>
     </div>
+  );
+}
+
+// --- portada del proyecto ----------------------------------------------------------------------
+
+function Stat({ label, value, hint, to }) {
+  const body = (
+    <>
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value}</div>
+      {hint && <div className="stat-hint">{hint}</div>}
+    </>
+  );
+  return to ? <Link to={to} className="stat stat-link">{body}</Link> : <div className="stat">{body}</div>;
+}
+
+/** Cifras del proyecto: qué hay y en qué estado, con enlaces a la vista de cada tipo de cálculo. */
+function ProjectSummary({ project }) {
+  const [data, setData] = useState(null);
+  const base = `/projects/${project.id}`;
+  const expert = project.tipo === 'expertos';
+
+  useEffect(() => {
+    let cancelled = false;
+    const paths = [`${base}/jobs`, ...(expert ? [`${base}/invitations`, `${base}/inputs`] : [])];
+    Promise.all(paths.map((path) => send(`/app${path}`, 'GET').catch(() => ({}))))
+      .then(([jobs, invitations, inputs]) => {
+        if (cancelled) return;
+        setData({
+          jobs: jobs.ok ? jobs.data : [],
+          invitations: invitations?.ok ? invitations.data : [],
+          inputs: inputs?.ok ? inputs.data : [],
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [base, expert]);
+
+  if (!data) return <div className="stats"><div className="stat"><div className="stat-label">Cargando…</div></div></div>;
+  const pending = data.jobs.filter((j) => j.status === 'pending').length;
+  const done = (list) => list.filter((j) => j.status === 'success' || j.status === 'partial').length;
+
+  if (expert) {
+    const answered = data.invitations.filter((i) => i.estado === 'usada').length;
+    const perExpert = data.jobs.filter((j) => j.kind === 'fe' && j.experto);
+    const aggregates = data.jobs.filter((j) => j.kind === 'fe' && j.expertos);
+    return (
+      <div className="stats">
+        <Stat label="Expertos que respondieron" value={answered} hint={`de ${data.invitations.length} invitados`} />
+        <Stat label="Inputs en el análisis" value={data.inputs.filter((i) => !i.excluido).length} hint={`${data.inputs.filter((i) => i.excluido).length} excluidos`} to={`${base}/individual`} />
+        <Stat label="Cálculos por experto" value={perExpert.length} hint={`${done(perExpert)} terminados`} to={`${base}/individual`} />
+        <Stat label="Cálculos agregados" value={aggregates.length} hint={`${done(aggregates)} terminados`} to={`${base}/lote`} />
+        {pending > 0 && <Stat label="En curso" value={pending} hint="en cola o corriendo" />}
+      </div>
+    );
+  }
+  const maxmin = data.jobs.filter((j) => j.kind === 'maxmin');
+  const sweeps = data.jobs.filter((j) => j.kind === 'sweep');
+  return (
+    <div className="stats">
+      <Stat label="Cálculos MaxMin" value={maxmin.length} hint={`${done(maxmin)} terminados`} to={`${base}/individual`} />
+      <Stat label="Barridos" value={sweeps.length} hint={`${done(sweeps)} terminados`} to={`${base}/lote`} />
+      {pending > 0 && <Stat label="En curso" value={pending} hint="en cola o corriendo" />}
+    </div>
+  );
+}
+
+/** Los pasos de trabajo de cada tipo de proyecto, con enlaces a la vista donde se hace cada uno. */
+function ProjectSteps({ project }) {
+  const base = `/projects/${project.id}`;
+  if (project.tipo === 'expertos') {
+    return (
+      <ol className="steps small">
+        <li><strong>Etiquetas.</strong> Define las causas y los efectos; solo se editan mientras el proyecto está en borrador.</li>
+        <li><strong>Invitaciones.</strong> Abre el proyecto e invita a los expertos (más abajo). Cada uno recibe un enlace personal.</li>
+        <li><strong>Inputs.</strong> Cada experto sube sus matrices CC, CE y EE por su enlace y puede corregirlas durante una semana.</li>
+        <li><strong><Link to={`${base}/individual`}>Por experto</Link>.</strong> Calcula los caminos de cada experto con el THR y el orden máximo que elijas, y compáralos.</li>
+        <li><strong><Link to={`${base}/lote`}>Agregados</Link>.</strong> Calcula los caminos de todos los expertos juntos, con bootstrap (Count, Mean y SD).</li>
+      </ol>
+    );
+  }
+  return (
+    <ol className="steps small">
+      <li><strong><Link to={`${base}/individual`}>MaxMin individual</Link>.</strong> Un cálculo con N, c, THR y semilla, y sus efectos por orden.</li>
+      <li><strong><Link to={`${base}/lote`}>Barridos</Link>.</strong> Listas de N y c con R repeticiones en un solo job, para estimar el orden efectivo medio L(N, c).</li>
+      <li><strong>Cierre.</strong> Cierra el proyecto cuando termines; se puede reabrir para lanzar más cálculos.</li>
+    </ol>
+  );
+}
+
+function ProjectOverview({ project, editing, onEditDone, onSaved, me, onAdminsChanged, onChanged }) {
+  const expert = project.tipo === 'expertos';
+  return (
+    <>
+      <div className="card">
+        <h2 style={{ marginBottom: 8 }}>Acerca del proyecto</h2>
+        {editing ? (
+          <EditProject project={project} onSaved={(p) => { onSaved(p); onEditDone(); }} onCancel={onEditDone} />
+        ) : (
+          <>
+            {project.descripcion
+              ? <p style={{ whiteSpace: 'pre-wrap', margin: '0 0 12px', fontSize: 14 }}>{project.descripcion}</p>
+              : <p className="sub">Sin descripción. Usa «Editar» para contar de qué trata el proyecto.</p>}
+            <div className="kv">
+              <span>Tipo</span><span>{TIPO_LABELS[project.tipo]}</span>
+              <span>Estado</span><span><span className={`badge estado-${project.estado}`}>{project.estado}</span></span>
+              {expert && <>
+                <span>Causas ({project.causas.length})</span><span className="labels">{project.causas.map((l) => <span key={l} className="pill">{l}</span>)}</span>
+                <span>Efectos ({project.efectos.length})</span><span className="labels">{project.efectos.map((l) => <span key={l} className="pill">{l}</span>)}</span>
+              </>}
+              <span>Dueño</span><span>{project.owner ? personLabel(project.owner) : '—'}</span>
+              <span>Creado</span><span className="small">{fmtDate(project.created_at)}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="card">
+        <h2 style={{ marginBottom: 10 }}>Resumen</h2>
+        <ProjectSummary project={project} />
+        <h2 style={{ margin: '18px 0 6px', fontSize: 14 }}>Cómo se trabaja</h2>
+        <ProjectSteps project={project} />
+      </div>
+
+      <ProjectAdmins project={project} me={me} onChanged={onAdminsChanged} />
+      {expert && <Invitations project={project} onChanged={onChanged} />}
     </>
   );
 }
 
 // --- página ------------------------------------------------------------------------------------
 
+/** Vistas del proyecto (`/projects/:id`, `/projects/:id/individual`, `/projects/:id/lote`). */
+const TABS = {
+  expertos: [
+    { key: '', label: 'Proyecto' },
+    { key: 'individual', label: 'Por experto' },
+    { key: 'lote', label: 'Agregados' },
+  ],
+  simulacion: [
+    { key: '', label: 'Proyecto' },
+    { key: 'individual', label: 'MaxMin individual' },
+    { key: 'lote', label: 'Barridos' },
+  ],
+};
+
 export default function ProjectDetail() {
-  const { projectId } = useParams();
+  const { projectId, tab = '' } = useParams();
   const navigate = useNavigate();
   const [project, setProject] = useState(null);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(false);
   const [msg, setMsg] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
-  const [inputsKey, setInputsKey] = useState(0); // sube al llegar inputs nuevos: recarga invitaciones
-  const [me, setMe] = useState(null);
   const [inputItems, setInputItems] = useState(null);
+  const [me, setMe] = useState(null);
 
   useEffect(() => {
     fetchMe().then(setMe).catch(() => {});
@@ -851,6 +1000,11 @@ export default function ProjectDetail() {
     else setMsg(errorText(data, 'No se pudo borrar el proyecto'));
   }
 
+  function onAdminsChanged(p) {
+    if (me && !p.puede_gestionar && p.owner?.id !== me.id && !p.admins.some((a) => a.id === me.id) && me.rol !== 'superadmin') navigate('/projects');
+    else setProject(p);
+  }
+
   if (error) {
     return (
       <div className="card">
@@ -861,92 +1015,88 @@ export default function ProjectDetail() {
   }
   if (!project) return <div className="card"><div className="empty">Cargando…</div></div>;
 
+  const tabs = TABS[project.tipo] || TABS.simulacion;
+  if (!tabs.some((t) => t.key === tab)) return <Navigate to={`/projects/${project.id}`} replace />;
   const expert = project.tipo === 'expertos';
   const empty = !project.conteos.inputs && !project.conteos.calculos;
+  const closed = project.estado !== 'abierto';
+  const base = `/projects/${project.id}`;
 
   return (
     <div className="stack">
-      <div className="card">
+      <div className="card project-head">
         <div className="small"><Link to="/projects" className="muted">← proyectos</Link></div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-          <h1>{project.nombre}</h1>
+          <h1>
+            {project.nombre}{' '}
+            <span className="pill">{TIPO_LABELS[project.tipo]}</span>{' '}
+            <span className={`badge estado-${project.estado}`}>{project.estado}</span>
+          </h1>
           <div className="controls" style={{ marginBottom: 0 }}>
             {project.transiciones.map((t) => (
               <button key={t} type="button" className={t === 'abierto' ? 'primary' : undefined} onClick={() => transition(t)}>
                 {TRANSITION_LABELS[t]?.[project.estado] || t}
               </button>
             ))}
-            {!editing && <button type="button" onClick={() => setEditing(true)}>Editar</button>}
+            {!editing && <button type="button" onClick={() => { setEditing(true); navigate(base); }}>Editar</button>}
             {empty && project.puede_gestionar && <button type="button" onClick={remove}>Borrar</button>}
           </div>
         </div>
         {msg && <p className="status err small">{msg}</p>}
-        {project.descripcion && !editing && <p className="sub" style={{ whiteSpace: 'pre-wrap' }}>{project.descripcion}</p>}
-        {editing ? (
-          <EditProject
-            project={project}
-            onSaved={(p) => { setProject({ ...project, ...p }); setEditing(false); }}
-            onCancel={() => setEditing(false)}
-          />
-        ) : (
-          <div className="kv">
-            <span>Tipo</span><span>{TIPO_LABELS[project.tipo]}</span>
-            <span>Estado</span><span><span className={`badge estado-${project.estado}`}>{project.estado}</span></span>
-            {expert && <>
-              <span>Causas ({project.causas.length})</span><span className="small">{project.causas.join(', ')}</span>
-              <span>Efectos ({project.efectos.length})</span><span className="small">{project.efectos.join(', ')}</span>
-            </>}
-            <span>Creado</span><span className="small">{fmtDate(project.created_at)}</span>
-          </div>
-        )}
+        <nav className="tabs" aria-label="Vistas del proyecto">
+          {tabs.map((t) => (
+            <NavLink key={t.key} to={t.key ? `${base}/${t.key}` : base} end className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              {t.label}
+            </NavLink>
+          ))}
+        </nav>
       </div>
 
-      <ProjectAdmins
-        project={project}
-        me={me}
-        onChanged={(p) => {
-          if (me && !p.puede_gestionar && p.owner?.id !== me.id && !p.admins.some((a) => a.id === me.id) && me.rol !== 'superadmin') navigate('/projects');
-          else setProject(p);
-        }}
-      />
-      {expert && <Invitations project={project} onChanged={load} refreshKey={inputsKey} />}
-      {expert && (
-        <Inputs
+      {tab === '' && (
+        <ProjectOverview
           project={project}
+          editing={editing}
+          onEditDone={() => setEditing(false)}
+          onSaved={(p) => setProject({ ...project, ...p })}
+          me={me}
+          onAdminsChanged={onAdminsChanged}
           onChanged={load}
-          onNewInputs={() => { setInputsKey((k) => k + 1); load(); }}
-          onItems={setInputItems}
-        />
-      )}
-      {expert && (
-        <JointAnalysis
-          project={project}
-          inputs={inputItems}
-          // Se recarga al llegar inputs o al cambiar el estado de un cálculo por experto.
-          refreshKey={`${inputsKey}|${(inputItems || []).flatMap((i) => i.calculos.map((c) => `${c.job_id}:${c.status}`)).join(',')}`}
         />
       )}
 
-      {!expert && (
-        <div className="card">
-          <h2 style={{ marginBottom: 10 }}>Nuevo cálculo MaxMin</h2>
-          {project.estado !== 'abierto' && <p className="small muted">El proyecto está cerrado: reábrelo para lanzar cálculos.</p>}
-          <MaxMinForm projectId={project.id} disabled={project.estado !== 'abierto'} onLaunched={() => { setRefreshKey((k) => k + 1); load(); }} />
-        </div>
+      {expert && tab === 'individual' && (
+        <>
+          <Inputs project={project} onChanged={load} onNewInputs={load} onItems={setInputItems} />
+          <ExpertCompare project={project} inputs={inputItems} />
+        </>
       )}
-      {!expert && (
-        <div className="card">
-          <h2 style={{ marginBottom: 4 }}>Nuevo barrido</h2>
-          <p className="sub">
-            Recorre cada c y cada N con R repeticiones en un solo job y estima el orden efectivo medio L(N, c),
-            como <span className="mono">comprobacion_empirica/test2.py</span>. Antes de lanzar se revisan las combinaciones válidas
-            (N par y c ≤ N/2 − 1) y la duración estimada.
-          </p>
-          {project.estado !== 'abierto' && <p className="small muted">El proyecto está cerrado: reábrelo para lanzar barridos.</p>}
-          <SweepForm projectId={project.id} disabled={project.estado !== 'abierto'} onLaunched={() => setRefreshKey((k) => k + 1)} />
-        </div>
+      {expert && tab === 'lote' && <Aggregates project={project} />}
+
+      {!expert && tab === 'individual' && (
+        <>
+          <div className="card">
+            <h2 style={{ marginBottom: 10 }}>Nuevo cálculo MaxMin</h2>
+            {closed && <p className="small muted">El proyecto está cerrado: reábrelo para lanzar cálculos.</p>}
+            <MaxMinForm projectId={project.id} disabled={closed} onLaunched={() => { setRefreshKey((k) => k + 1); load(); }} />
+          </div>
+          <MaxMinJobs project={project} refreshKey={refreshKey} />
+        </>
       )}
-      {!expert && <SimulationJobs project={project} refreshKey={refreshKey} />}
+      {!expert && tab === 'lote' && (
+        <>
+          <div className="card">
+            <h2 style={{ marginBottom: 4 }}>Nuevo barrido</h2>
+            <p className="sub">
+              Recorre cada c y cada N con R repeticiones en un solo job y estima el orden efectivo medio L(N, c),
+              como <span className="mono">comprobacion_empirica/test2.py</span>. Antes de lanzar se revisan las combinaciones válidas
+              (N par y c ≤ N/2 − 1) y la duración estimada.
+            </p>
+            {closed && <p className="small muted">El proyecto está cerrado: reábrelo para lanzar barridos.</p>}
+            <SweepForm projectId={project.id} disabled={closed} onLaunched={() => setRefreshKey((k) => k + 1)} />
+          </div>
+          <SweepJobs project={project} refreshKey={refreshKey} />
+        </>
+      )}
     </div>
   );
 }

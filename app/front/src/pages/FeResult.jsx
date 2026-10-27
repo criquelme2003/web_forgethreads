@@ -261,7 +261,7 @@ export default function FeResult() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
           <h1>Caminos · job <span className="mono">{job.job_id}</span></h1>
           {job.project_id != null
-            ? <Link to={`/projects/${job.project_id}`} className="small muted">← proyecto</Link>
+            ? <Link to={`/projects/${job.project_id}/${job.expertos ? 'lote' : 'individual'}`} className="small muted">← {job.expertos ? 'agregados' : 'por experto'}</Link>
             : <Link to="/fe" className="small muted">nuevo cálculo →</Link>}
         </div>
         <div className="kv">

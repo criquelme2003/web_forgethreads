@@ -43,6 +43,7 @@ La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálc
 |---|---|
 | RF-06 | Un proyecto tiene nombre, descripción, tipo (`expertos` \| `simulacion`), dueño, co-admins y estado. |
 | RF-07 | Los jobs MaxMin existentes se migran a un proyecto de simulación del superadmin. |
+| RF-61 | **Vistas del proyecto** (2026-10-27). Cada proyecto se organiza en tres pestañas con su propia URL: **Proyecto** (`/projects/<id>`, la que se abre por defecto), introductoria: descripción, tipo, estado, etiquetas, dueño, un resumen con cifras, los pasos de trabajo del tipo de proyecto, administradores e invitaciones; **cálculos individuales** (`/individual`): en expertos, los inputs, el cálculo por experto y la comparación; en simulación, MaxMin individual; y **cálculos por lote** (`/lote`): en expertos, el cálculo agregado; en simulación, los barridos. |
 
 ### 2.1 Reporte y difusión de resultados
 

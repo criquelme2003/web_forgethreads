@@ -90,7 +90,7 @@ export default function FeCompare() {
       <div className="card">
         <h1>Comparar expertos</h1>
         <p className="status err">{error}</p>
-        <Link to={`/projects/${projectId}`} className="small">← proyecto</Link>
+        <Link to={`/projects/${projectId}/individual`} className="small">← por experto</Link>
       </div>
     );
   }
@@ -104,7 +104,7 @@ export default function FeCompare() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
           <h1>Comparar expertos</h1>
-          <Link to={`/projects/${projectId}`} className="small muted">← proyecto</Link>
+          <Link to={`/projects/${projectId}/individual`} className="small muted">← por experto</Link>
         </div>
         <table style={{ marginTop: 8 }}>
           <thead><tr><th>Experto</th><th>Cálculo</th><th>THR</th><th>Orden máx.</th><th>Input</th></tr></thead>
