@@ -498,9 +498,10 @@ function useProjectJobs(projectId, filter, refreshKey) {
   return jobs;
 }
 
-/** Cálculo agregado de los inputs no excluidos (k ≥ 2, con bootstrap) y su lista (RF-24, RF-25). */
+/** Cálculo agregado de los inputs elegidos (k ≥ 2, con bootstrap) y su lista (RF-24, RF-25). */
 function Aggregates({ project }) {
   const [inputs, setInputs] = useState(null);
+  const [selected, setSelected] = useState(() => new Set()); // por defecto, los no excluidos
   const [pollKey, setPollKey] = useState(0);
   const jobs = useProjectJobs(project.id, (j) => j.kind === 'fe' && j.expertos, pollKey);
   const [thr, setThr] = useState('0.5');
@@ -515,14 +516,34 @@ function Aggregates({ project }) {
     apiJson('/app/nodes/available')
       .then((data) => setNodeOptions(Array.isArray(data.options) ? data.options : []))
       .catch(() => {});
-    send(`/app/projects/${project.id}/inputs`, 'GET').then(({ ok, data }) => ok && setInputs(data)).catch(() => {});
+    send(`/app/projects/${project.id}/inputs`, 'GET')
+      .then(({ ok, data }) => {
+        if (!ok) return;
+        setInputs(data);
+        setSelected(new Set(data.filter((i) => !i.excluido).map((i) => i.id)));
+      })
+      .catch(() => {});
   }, [project.id]);
 
-  const included = (inputs || []).filter((i) => !i.excluido);
+  const all = inputs || [];
+  const included = all.filter((i) => selected.has(i.id));
+  const allSelected = all.length > 0 && included.length === all.length;
+
+  function toggle(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function launch(e) {
     e.preventDefault();
-    const body = { thr: Number(thr.replace(',', '.')), maxorder: Number(maxorder), reps: Number(reps), nodo: nodo || null };
+    const body = {
+      thr: Number(thr.replace(',', '.')), maxorder: Number(maxorder), reps: Number(reps), nodo: nodo || null,
+      input_ids: included.map((i) => i.id),
+    };
     if (!(body.thr >= 0 && body.thr <= 1)) return setMsg({ text: 'THR debe estar en [0,1].', kind: 'err' });
     if (!Number.isInteger(body.maxorder) || body.maxorder < 2 || body.maxorder > 10) return setMsg({ text: 'El orden máximo debe ser un entero entre 2 y 10.', kind: 'err' });
     if (!Number.isInteger(body.reps) || body.reps < 1) return setMsg({ text: 'Las repeticiones del bootstrap deben ser un entero ≥ 1.', kind: 'err' });
@@ -541,11 +562,44 @@ function Aggregates({ project }) {
       <div className="card">
         <h2>Nuevo cálculo agregado</h2>
         <p className="sub">
-          Apila los inputs no excluidos (k ≥ 2) y aplica el bootstrap de forgeffects con las repeticiones que indiques:
-          el resultado trae Count, Mean y SD por camino. Los inputs se excluyen o incluyen en la pestaña{' '}
-          <Link to={`/projects/${project.id}/individual`}>Por experto</Link>.
+          Apila los inputs que elijas (k ≥ 2) y aplica el bootstrap de forgeffects con las repeticiones que indiques:
+          el resultado trae Count, Mean y SD por camino. Por defecto quedan elegidos los inputs no excluidos
+          (se excluyen en la pestaña <Link to={`/projects/${project.id}/individual`}>Por experto</Link>); cada cálculo usa la versión vigente de cada input.
         </p>
         <form className="compute-form" onSubmit={launch} noValidate>
+          <div style={{ overflow: 'auto', maxHeight: 300, background: '#fff', border: '1px solid var(--border)', borderRadius: 6 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      disabled={all.length === 0}
+                      onChange={() => setSelected(allSelected ? new Set() : new Set(all.map((i) => i.id)))}
+                      aria-label="Elegir todos"
+                    />
+                  </th>
+                  <th>Experto</th><th>Versión</th><th>Recibido</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inputs === null && <tr><td colSpan="4" className="empty">Cargando…</td></tr>}
+                {inputs !== null && all.length === 0 && <tr><td colSpan="4" className="empty">Aún no hay respuestas</td></tr>}
+                {all.map((item) => (
+                  <tr key={item.id} className={item.excluido ? 'row-muted' : undefined}>
+                    <td><input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} aria-label={`Incluir ${item.email || item.id}`} /></td>
+                    <td>
+                      {item.email ? expertName(item) : `invitación ${item.invitation_id}`}
+                      {item.excluido && <span className="small muted"> · excluido</span>}
+                    </td>
+                    <td className="small">v{item.version}</td>
+                    <td className="small">{fmtDate(item.updated_at || item.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div className="grid-3">
             <div className="field">
               <label htmlFor="agg-thr">THR</label>
@@ -574,7 +628,7 @@ function Aggregates({ project }) {
               {busy ? 'Lanzando…' : `Calcular agregado de ${included.length} expertos`}
             </button>
             <span className={`status ${msg.kind} small`} role="status" aria-live="polite">
-              {msg.text || (inputs === null ? '' : included.length < 2 ? 'Hacen falta al menos 2 inputs no excluidos.' : included.map(expertName).join(', '))}
+              {msg.text || (inputs === null ? '' : included.length < 2 ? 'Elige al menos 2 inputs.' : '')}
             </span>
           </div>
         </form>

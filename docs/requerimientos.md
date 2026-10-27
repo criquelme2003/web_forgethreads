@@ -104,7 +104,7 @@ Los resultados no se muestran a los expertos en la app (RF-19). Se comunican con
 
 | ID | Requerimiento |
 |---|---|
-| RF-24 | **Cálculo agregado**: el admin lanza `FE` sobre los inputs no excluidos apilados (`k` expertos, `k ≥ 2`). El admin define `reps` del bootstrap, `THR` y `maxorder`. El resultado incluye `Count`, `Mean` y `SD`. |
+| RF-24 | **Cálculo agregado**: el admin lanza `FE` sobre los inputs que elige apilados (por defecto, los no excluidos) (`k` expertos, `k ≥ 2`). El admin define `reps` del bootstrap, `THR` y `maxorder`. El resultado incluye `Count`, `Mean` y `SD`. |
 | RF-25 | Se pueden lanzar varios cálculos agregados; cada uno registra qué inputs incluyó. |
 | RF-26 | **Comparación**: Sankeys de los expertos elegidos lado a lado, y una tabla de caminos con una columna por experto (si tiene el camino y su `Mean`) más el número de expertos que lo comparten. |
 
