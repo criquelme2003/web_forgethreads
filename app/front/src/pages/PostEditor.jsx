@@ -50,6 +50,43 @@ function jobDetail(j) {
   return `${(p.ns || []).length} valores de N × ${(p.cs || []).length} de c · ${p.reps} repeticiones`;
 }
 
+const same = (wanted, value) => wanted == null || (value != null && Math.abs(Number(wanted) - Number(value)) < 1e-9);
+
+/** ¿El job cumple lo que busca la figura? Igual que `CalcQuery.matches` del backend. */
+function matches(q, j) {
+  if (j.kind !== q.kind) return false;
+  const p = j.params || {};
+  if (q.kind === 'fe') {
+    if (q.agregado != null && Boolean(j.expertos) !== q.agregado) return false;
+    return same(q.thr, p.thr) && same(q.maxorder, p.maxorder);
+  }
+  if (q.kind === 'maxmin') return same(q.thr, p.threshold) && same(q.n, p.numero_nodos) && same(q.c, p.conectividad_promedio);
+  return same(q.thr, p.thr);
+}
+
+/** Cálculo de la figura: el concreto o el más reciente con resultados que cumpla la búsqueda. */
+function resolveJob(fig, jobs) {
+  if (!jobs) return undefined;
+  if (fig.job_id) return jobs.find((j) => j.job_id === fig.job_id && publishable(j)) || null;
+  const found = jobs.filter((j) => publishable(j) && matches(fig.buscar, j));
+  found.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return found[0] || null;
+}
+
+function queryLabel(q) {
+  if (q.descripcion) return q.descripcion;
+  let s = { fe: 'Cálculo de caminos', maxmin: 'Cálculo MaxMin', sweep: 'Barrido' }[q.kind];
+  if (q.agregado != null) s += q.agregado ? ' agregado' : ' por experto';
+  for (const [k, v] of [['N', q.n], ['c', q.c], ['THR', q.thr], ['orden máximo', q.maxorder]]) if (v != null) s += `, ${k} ${v}`;
+  return s;
+}
+
+function defaultQuery(tipo) {
+  return tipo === 'simulacion'
+    ? { kind: 'maxmin', thr: 0.5, descripcion: '' }
+    : { kind: 'fe', agregado: false, thr: 0.5, maxorder: 3, descripcion: '' };
+}
+
 function jobLink(j) {
   if (j.kind === 'fe') return `/fe/jobs/${j.job_id}`;
   if (j.kind === 'maxmin') return `/maxmin/jobs/${j.job_id}`;
@@ -93,12 +130,37 @@ function nextRef(figures) {
   return `f${n}`;
 }
 
-function FigureEditor({ fig, job, cited, onChange, onCite }) {
-  if (!job) {
-    return <p className="status err small">El cálculo {fig.job_id} ya no está disponible o aún no termina: quita esta figura o elige otro cálculo.</p>;
-  }
-  const p = job.params || {};
-  const orders = (job.result?.orders || []).map(Number);
+/** Campos de la búsqueda: el cálculo más reciente del proyecto que cumpla estos parámetros. */
+function QueryFields({ q, onChange }) {
+  const num = (field) => (e) => onChange({ ...q, [field]: e.target.value === '' ? null : Number(e.target.value) });
+  const kinds = { fe: 'Caminos (forgeffects)', maxmin: 'MaxMin', sweep: 'Barrido' };
+  return (
+    <div className="controls" style={{ margin: '8px 0' }}>
+      <select value={q.kind} onChange={(e) => onChange({ kind: e.target.value, thr: q.thr ?? 0.5, descripcion: q.descripcion })} aria-label="Tipo de cálculo">
+        {Object.entries(kinds).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+      {q.kind === 'fe' && (
+        <select value={q.agregado == null ? '' : String(q.agregado)} onChange={(e) => onChange({ ...q, agregado: e.target.value === '' ? null : e.target.value === 'true' })} aria-label="Por experto o agregado">
+          <option value="false">Por experto</option>
+          <option value="true">Agregado de expertos</option>
+          <option value="">Cualquiera</option>
+        </select>
+      )}
+      {q.kind === 'maxmin' && <input className="inline-input post-num" type="number" min="2" step="2" placeholder="N" value={q.n ?? ''} onChange={num('n')} aria-label="N" />}
+      {q.kind === 'maxmin' && <input className="inline-input post-num" type="number" min="0" step="0.1" placeholder="c" value={q.c ?? ''} onChange={num('c')} aria-label="c" />}
+      <input className="inline-input post-num" type="number" min="0" max="1" step="0.05" placeholder="THR" value={q.thr ?? ''} onChange={num('thr')} aria-label="THR" />
+      {q.kind === 'fe' && <input className="inline-input post-num" type="number" min="2" max="10" placeholder="Orden máx." value={q.maxorder ?? ''} onChange={num('maxorder')} aria-label="Orden máximo" />}
+      <input className="inline-input" style={{ flex: 1 }} maxLength={300} placeholder="Descripción para el lector (opcional)" value={q.descripcion || ''} onChange={(e) => onChange({ ...q, descripcion: e.target.value })} aria-label="Descripción del cálculo" />
+    </div>
+  );
+}
+
+function FigureEditor({ fig, job, jobs, cited, projectTipo, onChange, onCite }) {
+  const kind = job?.kind || fig.buscar?.kind;
+  const p = job?.params || {};
+  const orders = job
+    ? (job.result?.orders || []).map(Number)
+    : Array.from({ length: (fig.buscar?.maxorder || 5) - 1 }, (_, i) => i + 2);
   const set = (field) => (e) => {
     const raw = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
     const value = field === 'orden' || field === 'top' ? (raw === '' ? undefined : Number(raw)) : raw;
@@ -106,23 +168,43 @@ function FigureEditor({ fig, job, cited, onChange, onCite }) {
     if (value === undefined || value === '') delete next[field];
     onChange(next);
   };
-  const fe = job.kind === 'fe';
+  // Cambiar de cálculo concreto a búsqueda (o al revés) conserva la vista si sigue siendo válida.
+  function setSource(next) {
+    const k = next.job_id ? jobs.find((j) => j.job_id === next.job_id)?.kind : next.buscar.kind;
+    const vista = VIEW_OPTIONS[k]?.some(([v]) => v === fig.vista) ? fig.vista : DEFAULT_VIEW[k];
+    const { job_id: _j, buscar: _b, ...rest } = fig; // eslint-disable-line no-unused-vars
+    onChange({ ...rest, ...next, vista });
+  }
+  const fe = kind === 'fe';
+  const ready = (jobs || []).filter(publishable);
   return (
     <div className="post-calc-editor">
-      <div className="small">
-        <strong>{KIND_LABEL[job.kind]}</strong> · {jobDetail(job)}
-        <span className="muted"> · job <Link to={jobLink(job)} className="mono">{job.job_id}</Link> · {fmtDate(job.created_at)}</span>
+      <div className="controls" style={{ marginBottom: 4 }} role="radiogroup" aria-label="Cálculo">
+        <label className="checkbox-label"><input type="radio" checked={!!fig.job_id} disabled={!ready.length} onChange={() => setSource({ job_id: (job || ready[0]).job_id })} /> Un cálculo terminado</label>
+        <label className="checkbox-label"><input type="radio" checked={!!fig.buscar} onChange={() => setSource({ buscar: job ? { ...defaultQuery(projectTipo), kind: job.kind } : defaultQuery(projectTipo) })} /> El más reciente que cumpla… (puede no existir aún)</label>
+      </div>
+      {fig.job_id && (
+        <select value={fig.job_id} onChange={(e) => setSource({ job_id: e.target.value })} aria-label="Cálculo" style={{ maxWidth: '100%' }}>
+          {!job && <option value={fig.job_id}>job {fig.job_id} (no disponible)</option>}
+          {ready.map((j) => <option key={j.job_id} value={j.job_id}>{KIND_LABEL[j.kind]} · {jobDetail(j)} · job {j.job_id}</option>)}
+        </select>
+      )}
+      {fig.buscar && <QueryFields q={fig.buscar} onChange={(buscar) => setSource({ buscar })} />}
+      <div className="small" style={{ marginTop: 6 }}>
+        {job
+          ? <>Usa: <strong>{KIND_LABEL[job.kind]}</strong> · {jobDetail(job)} <span className="muted">· job <Link to={jobLink(job)} className="mono">{job.job_id}</Link> · {fmtDate(job.created_at)}</span></>
+          : <span className="post-pending-note">{fig.buscar ? `Aún no hay un cálculo terminado que cumpla «${queryLabel(fig.buscar)}».` : 'El cálculo ya no está disponible.'} La figura se publicará «en preparación» hasta que exista y vuelvas a publicar.</span>}
       </div>
       <div className="controls" style={{ margin: '10px 0' }}>
         <select value={fig.vista} onChange={set('vista')} aria-label="Vista">
-          {VIEW_OPTIONS[job.kind].map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          {VIEW_OPTIONS[kind].map(([k, label]) => <option key={k} value={k}>{label}</option>)}
         </select>
         {fe && fig.vista !== 'hive' && orders.length > 0 && (
           <select value={fig.orden ?? orders[0]} onChange={set('orden')} aria-label="Orden">
-            {orders.map((o) => <option key={o} value={o}>Orden {o} ({job.result?.rows_per_order?.[String(o)] ?? '?'} caminos)</option>)}
+            {orders.map((o) => <option key={o} value={o}>Orden {o}{job ? ` (${job.result?.rows_per_order?.[String(o)] ?? '?'} caminos)` : ''}</option>)}
           </select>
         )}
-        {fe && (
+        {fe && (job || fig.origen) && (
           <select value={fig.origen || ''} onChange={set('origen')} aria-label="Origen">
             <option value="">Todos los orígenes (el lector puede filtrar)</option>
             {(p.causes || []).map((c) => <option key={c} value={c}>Solo desde «{c}»</option>)}
@@ -133,7 +215,7 @@ function FigureEditor({ fig, job, cited, onChange, onCite }) {
             {TOP_OPTIONS.map((n) => <option key={n} value={n}>{fig.vista === 'hive' ? `Top ${n} por orden` : `Top ${n} caminos`}</option>)}
           </select>
         )}
-        {job.kind === 'maxmin' && (
+        {kind === 'maxmin' && (
           <select value={fig.escala || 'lineal'} onChange={set('escala')} aria-label="Escala">
             <option value="lineal">Escala lineal</option>
             <option value="log">Escala logarítmica</option>
@@ -145,8 +227,8 @@ function FigureEditor({ fig, job, cited, onChange, onCite }) {
       </div>
       <div className="post-perms">
         <label className="checkbox-label"><input type="checkbox" checked={!!fig.publico} onChange={set('publico')} /> Mostrar el gráfico en la publicación</label>
-        <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_entradas} onChange={set('descargar_entradas')} /> Permitir descargar las entradas ({INPUTS_HINT[job.kind]})</label>
-        <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_resultados} onChange={set('descargar_resultados')} /> Permitir descargar los resultados completos ({RESULTS_HINT[job.kind]})</label>
+        <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_entradas} onChange={set('descargar_entradas')} /> Permitir descargar las entradas ({INPUTS_HINT[kind]})</label>
+        <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_resultados} onChange={set('descargar_resultados')} /> Permitir descargar los resultados completos ({RESULTS_HINT[kind]})</label>
         <label className="checkbox-label"><input type="checkbox" checked={!!fig.en_cuerpo} onChange={set('en_cuerpo')} /> Mostrarla también en el cuerpo del texto, bajo la sección donde se cita por primera vez</label>
       </div>
       <div className="controls" style={{ margin: '10px 0 0' }}>
@@ -162,7 +244,7 @@ function FigureEditor({ fig, job, cited, onChange, onCite }) {
         </p>
       )}
       <p className="small muted" style={{ margin: '8px 0 0' }}>
-        El público verá: {HOW_TO_READ[job.kind === 'sweep' && fig.vista === 'tabla' ? 'sweep_tabla' : fig.vista]}
+        El público verá: {HOW_TO_READ[kind === 'sweep' && fig.vista === 'tabla' ? 'sweep_tabla' : fig.vista]}
       </p>
     </div>
   );
@@ -189,6 +271,7 @@ function FigurePreview({ postId, fig }) {
     <div className="post-figure-preview">
       <div className="post-side-title">Vista previa {state.loading && <span className="muted">· actualizando…</span>}</div>
       {state.error && <p className="status err small">{state.error}</p>}
+      {state.data?.pendiente && <p className="post-pending-note small">{state.data.motivo}: se verá «en preparación».</p>}
       {state.data && (
         <VizErrorBoundary resetKey={body}>
           <FigureBlock b={state.data} />
@@ -198,10 +281,19 @@ function FigurePreview({ postId, fig }) {
   );
 }
 
-function CalcPicker({ jobs, onPick, scope }) {
+function CalcPicker({ jobs, onPick, onPickQuery, scope }) {
   const options = jobs.filter(publishable);
   return (
     <div className="post-picker">
+      {onPickQuery && (
+        <div className="post-picker-query">
+          <div>
+            <strong>¿El cálculo aún no existe?</strong>
+            <div className="small muted">La figura busca el más reciente que cumpla los parámetros que indiques y se ve «en preparación» mientras no exista.</div>
+          </div>
+          <button type="button" className="btn" onClick={onPickQuery}>Figura de un cálculo por ejecutar</button>
+        </div>
+      )}
       <p className="sub">{scope} Solo aparecen los terminados.</p>
       {!options.length && <div className="empty">No hay cálculos terminados.</div>}
       {options.length > 0 && (
@@ -252,7 +344,8 @@ function FigureItem({ fig, job, loading, cited, first, last, onEdit, onCite, onM
   const downloads = fig.descargar_entradas || fig.descargar_resultados;
   let state;
   if (loading) state = <span className="small muted">cargando…</span>;
-  else if (!job) state = <span className="badge error">no disponible</span>;
+  else if (cited && fig.publico && !job) state = <span className="badge pending" title="Su cálculo aún no está disponible">en preparación</span>;
+  else if (!job && !fig.buscar) state = <span className="badge error">no disponible</span>;
   else if (cited && fig.publico) state = <span className="badge success">se publica</span>;
   else if (cited) state = <span className="badge error">citada sin permiso</span>;
   else state = <span className="badge estado-borrador">{fig.publico ? 'sin citar' : 'privada'}</span>;
@@ -260,9 +353,10 @@ function FigureItem({ fig, job, loading, cited, first, last, onEdit, onCite, onM
     <li className="post-figitem">
       <button type="button" className="post-figitem-main" onClick={onEdit} title="Editar figura">
         <span className="mono">{fig.ref}</span>{' '}
-        <strong>{job ? KIND_LABEL[job.kind] : 'Cálculo'}</strong>
+        <strong>{KIND_LABEL[job?.kind || fig.buscar?.kind] || 'Cálculo'}</strong>
         {' · '}{VIEW_LABEL[fig.vista] || fig.vista}{fig.orden ? ` · orden ${fig.orden}` : ''}
-        {job && <span className="post-figitem-detail">{jobDetail(job)}</span>}
+        {fig.buscar && <span className="post-figitem-detail">Busca: {queryLabel(fig.buscar)}</span>}
+        {job && <span className="post-figitem-detail">{fig.buscar ? 'Encontrado: ' : ''}{jobDetail(job)}</span>}
       </button>
       <div className="post-figitem-foot">
         <span className="post-figitem-state">{state}{downloads && <span className="small muted" title="Con descargas permitidas"> ↓ datos</span>}{fig.en_cuerpo && <span className="small muted" title="También en el cuerpo del texto"> · en el texto</span>}</span>
@@ -317,7 +411,6 @@ export default function PostEditor() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
-  const jobsById = useMemo(() => Object.fromEntries((jobs || []).filter(publishable).map((j) => [j.job_id, j])), [jobs]);
   const cited = useMemo(
     () => new Set((draft?.bloques || []).flatMap((b) => [...b.markdown.matchAll(FIG_RE)].map((m) => m[1]))),
     [draft],
@@ -467,8 +560,15 @@ export default function PostEditor() {
               {busy === 'vista' ? 'Armando…' : 'Vista previa'}
             </button>
             <button type="button" onClick={onSave} disabled={!dirty || !!busy}>{busy === 'guardar' ? 'Guardando…' : 'Guardar'}</button>
-            <button type="button" className="primary" onClick={onPublish} disabled={!!busy || (published && !dirty && !post.cambios_sin_publicar)}>
-              {busy === 'publicar' ? 'Publicando…' : published ? 'Publicar cambios' : 'Publicar'}
+            {/* Siempre habilitado: volver a publicar sin cambios actualiza las figuras con los cálculos nuevos. */}
+            <button
+              type="button"
+              className="primary"
+              onClick={onPublish}
+              disabled={!!busy}
+              title={published && !dirty && !post.cambios_sin_publicar ? 'Vuelve a armar las figuras con los cálculos disponibles ahora' : undefined}
+            >
+              {busy === 'publicar' ? 'Publicando…' : !published ? 'Publicar' : dirty || post.cambios_sin_publicar ? 'Publicar cambios' : 'Volver a publicar'}
             </button>
           </div>
         </div>
@@ -583,7 +683,7 @@ export default function PostEditor() {
                 <FigureItem
                   key={f._k}
                   fig={f}
-                  job={jobsById[f.job_id]}
+                  job={resolveJob(f, jobs)}
                   loading={!jobs}
                   cited={cited.has(f.ref)}
                   first={i === 0}
@@ -604,6 +704,12 @@ export default function PostEditor() {
           <CalcPicker
             jobs={jobs || []}
             scope={post.proyecto ? `Cálculos del proyecto «${post.proyecto.nombre}».` : 'Cálculos que puedes ver.'}
+            onPickQuery={post.proyecto ? () => {
+              const fig = withKey({ ref: nextRef(draft.figuras), buscar: defaultQuery(post.proyecto.tipo), vista: post.proyecto.tipo === 'simulacion' ? 'efectos' : 'sankey', publico: false });
+              setList('figuras', (fs) => [...fs, fig]);
+              setPicker(false);
+              setEditingKey(fig._k);
+            } : undefined}
             onPick={(j) => {
               const fig = withKey({ ref: nextRef(draft.figuras), job_id: j.job_id, vista: DEFAULT_VIEW[j.kind], publico: false });
               setList('figuras', (fs) => [...fs, fig]);
@@ -617,12 +723,14 @@ export default function PostEditor() {
         <Modal title={`Figura «${editingFigure.fig.ref}»`} onClose={() => setEditingKey(null)}>
           <FigureEditor
             fig={editingFigure.fig}
-            job={jobsById[editingFigure.fig.job_id]}
+            job={resolveJob(editingFigure.fig, jobs)}
+            jobs={jobs || []}
+            projectTipo={post.proyecto?.tipo}
             cited={cited.has(editingFigure.fig.ref)}
             onChange={updateItem('figuras', editingFigure.index)}
             onCite={() => cite(editingFigure.fig.ref)}
           />
-          {jobsById[editingFigure.fig.job_id] && <FigurePreview postId={postId} fig={editingFigure.fig} />}
+          {post.proyecto || resolveJob(editingFigure.fig, jobs) ? <FigurePreview postId={postId} fig={editingFigure.fig} /> : null}
         </Modal>
       )}
     </div>

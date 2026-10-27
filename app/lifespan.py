@@ -6,8 +6,10 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.db.engine import display_url, dispose_engines, get_engine
 from app.repositories.slurm import SlurmRepository
-from app.services.demo_seed import seed_demo
+from app.services.demo_seed import seed_demo, seed_demo_posts
+from app.services.job_store import job_store
 from app.services.node_selector import NodeSelector
+from app.services.post_store import post_store
 from app.services.project_store import project_store
 from app.services.user_store import user_store
 from app.ssh.connection import clear_singletons, get_pool_from_settings, set_singletons
@@ -58,6 +60,7 @@ async def global_lifespan(app: FastAPI):
     if settings.seed_demo_data and superadmin is not None:
         try:
             await seed_demo(project_store, owner_id=superadmin.id)
+            await seed_demo_posts(project_store, post_store, job_store, superadmin, settings, pool)
         except Exception as e:  # noqa: BLE001  (los datos de muestra nunca impiden arrancar)
             logger.warning("No se pudieron crear los datos de muestra: %s", e)
 

@@ -14,6 +14,10 @@ Al publicar se guarda una instantánea con los datos de cada figura ya resueltos
 lee en `/app/blog` sin sesión, aunque el cluster no responda, y no ve los cambios del borrador
 hasta que se vuelve a publicar (RF-57).
 
+Una figura puede indicar un cálculo concreto (`job_id`) o uno por buscar (`buscar`: el más
+reciente del proyecto que cumpla ciertos parámetros). Si el cálculo no existe, no terminó o sus
+resultados no se pueden leer, la figura se publica como «en preparación» y la vista previa lo avisa.
+
 Opcionalmente (`en_cuerpo`), una figura también se muestra en el texto, bajo la sección donde se
 cita por primera vez. La vista pública se puede imprimir o guardar como PDF desde el navegador.
 
@@ -31,7 +35,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.deps import (
     get_job_store,
@@ -96,11 +100,62 @@ class Section(BaseModel):
     markdown: str = Field(default="", max_length=MAX_MARKDOWN)
 
 
+def _same(wanted: float | None, value) -> bool:
+    return wanted is None or (value is not None and abs(float(wanted) - float(value)) < 1e-9)
+
+
+class CalcQuery(BaseModel):
+    """Cálculo por buscar: el más reciente del proyecto que cumpla estos parámetros.
+
+    Puede no existir todavía: mientras tanto la figura se publica como «en preparación» y aparece
+    al volver a publicar después de ejecutar el cálculo.
+    """
+
+    kind: Literal["fe", "maxmin", "sweep"]
+    agregado: bool | None = Field(default=None, description="fe: agregado de expertos (True) o por experto (False)")
+    thr: float | None = Field(default=None, ge=0, le=1)
+    maxorder: int | None = Field(default=None, ge=2, le=10)
+    n: int | None = Field(default=None, ge=1, description="maxmin: número de nodos")
+    c: float | None = Field(default=None, gt=0, description="maxmin: conectividad promedio")
+    descripcion: str = Field(default="", max_length=300, description="Qué cálculo es, para el lector")
+
+    def matches(self, record: JobRecord) -> bool:
+        if record.kind != self.kind:
+            return False
+        p = record.params or {}
+        if self.kind == "fe":
+            if self.agregado is not None and bool(aggregate_inputs(record)) != self.agregado:
+                return False
+            return _same(self.thr, p.get("thr")) and _same(self.maxorder, p.get("maxorder"))
+        if self.kind == "maxmin":
+            return (
+                _same(self.thr, p.get("threshold")) and _same(self.n, p.get("numero_nodos"))
+                and _same(self.c, p.get("conectividad_promedio"))
+            )
+        return _same(self.thr, p.get("thr"))
+
+    def label(self) -> str:
+        if self.descripcion:
+            return self.descripcion
+        parts = {"fe": "Cálculo de caminos", "maxmin": "Cálculo MaxMin", "sweep": "Barrido"}[self.kind]
+        if self.agregado is not None:
+            parts += " agregado" if self.agregado else " por experto"
+        for name, value in (("N", self.n), ("c", self.c), ("THR", self.thr), ("orden máximo", self.maxorder)):
+            if value is not None:
+                parts += f", {name} {value}"
+        return parts
+
+
+class FigureUnavailable(Exception):
+    """El cálculo de la figura no existe, no terminó o sus resultados no se pueden leer."""
+
+
 class Figure(BaseModel):
-    """Un cálculo con la vista elegida (orden y filtro de origen guardados) y sus permisos."""
+    """Un cálculo (concreto o por buscar) con la vista elegida (orden y origen guardados) y sus permisos."""
 
     ref: str = Field(..., pattern=r"^[a-z0-9_-]{1,20}$", description="Clave para citarla: {{fig:<ref>}}")
-    job_id: str = Field(..., pattern=r"^\d+$", max_length=30)
+    job_id: str | None = Field(default=None, pattern=r"^\d+$", max_length=30)
+    buscar: CalcQuery | None = None
     vista: Literal["sankey", "hive", "tabla", "efectos", "por_n", "por_c"]
     orden: int | None = Field(default=None, ge=1)
     origen: str | None = Field(default=None, max_length=100)
@@ -111,6 +166,14 @@ class Figure(BaseModel):
     descargar_entradas: bool = False
     descargar_resultados: bool = False
     en_cuerpo: bool = Field(default=False, description="Mostrarla también en el texto, bajo la sección de su primera cita")
+
+    @model_validator(mode="after")
+    def _one_source(self) -> "Figure":
+        if (self.job_id is None) == (self.buscar is None):
+            raise ValueError(f"La figura «{self.ref}» debe indicar un cálculo concreto o uno por buscar")
+        if self.buscar and self.vista not in VIEWS[self.buscar.kind]:
+            raise ValueError(f"La vista «{self.vista}» no corresponde a un cálculo {self.buscar.kind}")
+        return self
 
 
 class PostCreate(BaseModel):
@@ -277,13 +340,36 @@ def _figure_error(ref: str, message: str, code: int = status.HTTP_422_UNPROCESSA
     return HTTPException(code, f"Figura «{ref}»: {message}")
 
 
-async def _figure_record(fig: Figure, user: User, store: JobStore, projects: ProjectStore) -> JobRecord:
-    """El job de la figura, si el usuario lo ve y admite la vista elegida."""
+async def _figure_record(
+    fig: Figure, user: User, store: JobStore, projects: ProjectStore, project_id: int | None,
+    strict: bool = True,
+) -> JobRecord:
+    """El job de la figura, si el usuario lo ve y admite la vista elegida.
+
+    Un cálculo por buscar se resuelve al más reciente del proyecto que cumpla sus parámetros y
+    tenga resultados. Si no hay, o si el job concreto ya no existe y `strict` es falso, lanza
+    FigureUnavailable (la figura se publica como «en preparación»).
+    """
+    if fig.buscar is not None:
+        if project_id is None:
+            raise _figure_error(fig.ref, "buscar un cálculo requiere que la publicación tenga proyecto")
+        found = sorted(
+            (r for r in await store.list_by_project(project_id) if fig.buscar.matches(r)),
+            key=lambda r: r.created_at, reverse=True,
+        )
+        ready = [r for r in found if r.status in _publishable(r.kind)]
+        if ready:
+            return ready[0]
+        if any(r.status == "pending" for r in found):
+            raise FigureUnavailable(f"el cálculo «{fig.buscar.label()}» está en curso")
+        raise FigureUnavailable(f"aún no hay un cálculo terminado que cumpla «{fig.buscar.label()}»")
     try:
         record = await store.get(fig.job_id)
     except JobNotFoundError:
         record = None
     if record is None or not await can_see_job(record, user, projects):
+        if not strict:
+            raise FigureUnavailable(f"el cálculo {fig.job_id} ya no existe")
         raise _figure_error(fig.ref, f"el cálculo {fig.job_id} no existe")
     if fig.vista not in VIEWS.get(record.kind, set()):
         raise _figure_error(fig.ref, f"la vista «{fig.vista}» no corresponde a un cálculo {record.kind}")
@@ -379,8 +465,11 @@ class _Renderer:
 
     async def render(self) -> dict:
         figures = {f["ref"]: Figure.model_validate(f) for f in self.post.figuras}
-        for fig in figures.values():  # una figura inválida (job borrado) se informa por su clave
-            await _figure_record(fig, self.user, self.store, self.projects)
+        for fig in figures.values():  # una vista que no corresponde se informa por su clave
+            try:
+                await _figure_record(fig, self.user, self.store, self.projects, self.post.project_id, strict=False)
+            except FigureUnavailable:
+                pass
         cited = cited_refs(self.post.bloques)
         for ref in cited:
             if ref not in figures:
@@ -401,7 +490,12 @@ class _Renderer:
             if fig is None or not fig.publico:
                 continue
             numero = len(out_figures) + 1
-            view, record = await self.figure(fig)
+            try:
+                view, record = await self.figure(fig)
+            except FigureUnavailable as e:
+                self.avisos.append(f"La figura «{ref}» se publicará como «en preparación»: {e}.")
+                out_figures.append({**self.placeholder(fig), "numero": numero, "ref": ref})
+                continue
             downloads = [d for d in DOWNLOADS if getattr(fig, f"descargar_{d}")]
             out_figures.append(
                 {**view, "numero": numero, "ref": ref, "descargas": downloads, "en_cuerpo": fig.en_cuerpo}
@@ -449,12 +543,26 @@ class _Renderer:
             "barridos": sum(1 for r in records if r.status in ("success", "partial") and r.kind == "sweep"),
         }
 
+    @staticmethod
+    def placeholder(fig: Figure) -> dict:
+        """Figura cuyo cálculo aún no está disponible: se muestra como «en preparación»."""
+        return {
+            "kind": fig.buscar.kind if fig.buscar else None,
+            "vista": fig.vista,
+            "pie": fig.pie,
+            "pendiente": True,
+            "descripcion": fig.buscar.label() if fig.buscar else "",
+            "meta": {},
+            "datos": {},
+            "descargas": [],
+            "en_cuerpo": fig.en_cuerpo,
+        }
+
     async def figure(self, fig: Figure) -> tuple[dict, JobRecord]:
-        record = await _figure_record(fig, self.user, self.store, self.projects)
+        record = await _figure_record(fig, self.user, self.store, self.projects, self.post.project_id, strict=False)
         if record.status not in _publishable(record.kind):
-            raise _figure_error(
-                fig.ref, f"el cálculo {record.job_id} está en estado {record.status}", status.HTTP_409_CONFLICT
-            )
+            estado = "en curso" if record.status == "pending" else f"en estado {record.status}"
+            raise FigureUnavailable(f"el cálculo {record.job_id} está {estado}")
         out = {"kind": record.kind, "vista": fig.vista, "pie": fig.pie, "fecha": record.created_at.isoformat()}
         try:
             if record.kind == "fe":
@@ -463,7 +571,9 @@ class _Renderer:
                 out.update(self.maxmin_data(record, fig))
             else:
                 out.update(await self.sweep_data(record))
-        except HTTPException as e:  # resultados no disponibles en el nodo (502)
+        except HTTPException as e:
+            if e.status_code == status.HTTP_502_BAD_GATEWAY:  # resultados no disponibles en el nodo
+                raise FigureUnavailable(str(e.detail)) from e
             raise _figure_error(fig.ref, str(e.detail), e.status_code) from e
         return out, record
 
@@ -630,7 +740,10 @@ async def update_post(
         fields["bloques"] = [s.model_dump() for s in body.bloques]
     if body.figuras is not None:
         for fig in body.figuras:
-            await _figure_record(fig, user, store, projects)
+            try:
+                await _figure_record(fig, user, store, projects, post.project_id)
+            except FigureUnavailable:  # un cálculo por buscar puede no existir todavía
+                pass
         fields["figuras"] = [f.model_dump(exclude_none=True) for f in body.figuras]
     try:
         post = await posts.update(post_id, **fields)
@@ -656,11 +769,18 @@ async def preview_figure(
     post_id: int, body: Figure, user: CurrentUser, posts: Posts, projects: Projects, store: Jobs,
     settings: SettingsDep, pool: Pool,
 ) -> dict:
-    """Una figura del borrador (aún sin guardar) tal como se verá, para el editor."""
+    """Una figura del borrador (aún sin guardar) tal como se verá, para el editor.
+
+    Si su cálculo aún no está disponible, devuelve la figura «en preparación» con el motivo.
+    """
     post, project = await _editable_post(post_id, user, posts, projects)
     renderer = _Renderer(post, project, user, store, projects, settings, pool)
-    view, _ = await renderer.figure(body)
-    return {**view, "numero": 0, "ref": body.ref, "descargas": [], "en_cuerpo": body.en_cuerpo}
+    try:
+        view, record = await renderer.figure(body)
+    except FigureUnavailable as e:
+        return {**renderer.placeholder(body), "numero": 0, "ref": body.ref, "motivo": str(e)}
+    # El job encontrado solo se muestra al admin en el editor; nunca va en lo publicado.
+    return {**view, "numero": 0, "ref": body.ref, "descargas": [], "en_cuerpo": body.en_cuerpo, "job_id": record.job_id}
 
 
 @router.post("/app/posts/{post_id}/publish", response_model=PostOut)

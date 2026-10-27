@@ -354,6 +354,49 @@ def test_figure_preview_in_editor(env) -> None:
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["kind"] == "fe" and body["datos"]["tables"][0]["total"] == 3
-    assert client.post(f"/app/posts/{post['id']}/figure-preview", json=_fig("x", "999", "tabla")).status_code == 422
+    missing = client.post(f"/app/posts/{post['id']}/figure-preview", json=_fig("x", "999", "tabla")).json()
+    assert missing["pendiente"] is True and "ya no existe" in missing["motivo"]
     client.cookies.clear()
     assert client.post(f"/app/posts/{post['id']}/figure-preview", json=_fig("x", "501", "tabla")).status_code == 401
+
+
+def test_figure_waits_for_a_calculation_not_yet_run(env) -> None:
+    """Una figura que busca un cálculo que aún no existe se publica «en preparación» (fallback)."""
+    client = env["client"]
+    sim = client.post("/app/projects", json={"nombre": "Sim", "tipo": "simulacion"}).json()
+    query = {"kind": "maxmin", "n": 100, "c": 2.5, "thr": 0.4, "descripcion": "MaxMin con N = 100"}
+    post = client.post("/app/posts", json={"titulo": "Pendiente", "project_id": sim["id"], "plantilla": False}).json()
+    figura = {"ref": "m", "buscar": query, "vista": "efectos", "publico": True, "descargar_resultados": True}
+    body = {"bloques": [_text("Ver {{fig:m}}.")], "figuras": [figura]}
+    assert client.patch(f"/app/posts/{post['id']}", json=body).status_code == 200
+    # Una vista que no corresponde al tipo buscado, o figura sin cálculo, no se aceptan.
+    bad = {**figura, "vista": "sankey"}
+    assert client.patch(f"/app/posts/{post['id']}", json={"figuras": [bad]}).status_code == 422
+    assert client.patch(f"/app/posts/{post['id']}", json={"figuras": [{"ref": "x", "vista": "efectos"}]}).status_code == 422
+
+    preview = client.get(f"/app/posts/{post['id']}/preview").json()
+    assert any("en preparación" in a and "aún no hay" in a for a in preview["avisos"])
+    assert client.post(f"/app/posts/{post['id']}/publish").status_code == 200
+    public = client.get("/app/blog/pendiente").json()
+    fig = public["figuras"][0]
+    assert fig["pendiente"] is True and fig["descripcion"] == "MaxMin con N = 100" and fig["descargas"] == []
+    assert client.get("/app/blog/pendiente/figuras/1/resultados.csv").status_code == 404
+
+    # En curso: sigue pendiente, con otro motivo.
+    asyncio.run(env["store"].create("701", "cuda1", kind="maxmin", project_id=sim["id"],
+                                    params={"numero_nodos": 100, "conectividad_promedio": 2.5, "threshold": 0.4}))
+    assert "en curso" in client.post(f"/app/posts/{post['id']}/figure-preview", json=figura).json()["motivo"]
+    # Otro cálculo con otros parámetros no cuenta.
+    _finished_job(env, "702", "maxmin", sim["id"], logs="",
+                  params={"numero_nodos": 200, "conectividad_promedio": 2.5, "threshold": 0.4})
+    log = "[MAXMIN C++] Efectos encontrados en orden 1 : 9\n"
+    asyncio.run(env["store"].update_from_callback("701", status="success", logs=log, effective_order=1))
+
+    found = client.post(f"/app/posts/{post['id']}/figure-preview", json=figura).json()
+    assert found["job_id"] == "701" and found["datos"]["effects_by_order"] == [{"order": 1, "count": 9}]
+    # Lo publicado no cambia hasta volver a publicar.
+    assert client.get("/app/blog/pendiente").json()["figuras"][0]["pendiente"] is True
+    client.post(f"/app/posts/{post['id']}/publish")
+    fig = client.get("/app/blog/pendiente").json()["figuras"][0]
+    assert "pendiente" not in fig and fig["meta"]["n"] == 100 and "job_id" not in fig
+    assert client.get("/app/blog/pendiente/figuras/1/resultados.csv").text == "orden,efectos\n1,9\n"

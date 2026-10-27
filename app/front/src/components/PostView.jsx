@@ -34,6 +34,7 @@ function who(meta) {
 
 /** Título automático de un gráfico a partir de su cálculo y su vista. */
 export function calcTitle(b) {
+  if (b.pendiente) return b.descripcion || 'Figura en preparación';
   if (b.kind === 'fe') {
     const by = who(b.meta);
     const suffix = by ? ` · ${by}` : '';
@@ -165,6 +166,7 @@ function SweepTable({ stats }) {
 }
 
 function CalcMeta({ b }) {
+  if (b.pendiente) return null;
   const m = b.meta;
   const items = [];
   if (b.kind === 'fe') {
@@ -184,6 +186,14 @@ function CalcMeta({ b }) {
 
 /** Gráfico de una figura (en la barra lateral o ampliada). */
 function FigureChart({ b, logY, compact }) {
+  if (b.pendiente) {
+    return (
+      <div className="post-figure-pending">
+        <strong>Figura en preparación</strong>
+        <span>El cálculo de esta figura aún no está disponible. Aparecerá cuando los autores actualicen la publicación.</span>
+      </div>
+    );
+  }
   const stats = b.datos.estadisticas || [];
   if (b.kind === 'fe') return <FeChart b={b} compact={compact} />;
   if (b.kind === 'maxmin') {
@@ -240,19 +250,23 @@ function SideFigure({ b, slug, open, highlighted, onToggle, onExpand }) {
       {open && (
         <div className="post-figure-body">
           <CalcMeta b={b} />
-          {b.kind === 'sweep' && b.vista !== 'tabla' && (
+          {b.kind === 'sweep' && b.vista !== 'tabla' && !b.pendiente && (
             <label className="checkbox-label"><input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} /> Eje vertical logarítmico</label>
           )}
-          <details className="post-howto">
-            <summary>¿Cómo leer este gráfico?</summary>
-            <p>{HOW_TO_READ[howKey]}</p>
-          </details>
+          {!b.pendiente && (
+            <details className="post-howto">
+              <summary>¿Cómo leer este gráfico?</summary>
+              <p>{HOW_TO_READ[howKey]}</p>
+            </details>
+          )}
           <div className="post-figure-chart"><FigureChart b={b} logY={logY} compact /></div>
           {b.pie && <figcaption><strong>Figura {b.numero}.</strong> {b.pie}</figcaption>}
-          <div className="post-figure-actions">
-            <button type="button" className="btn" onClick={() => onExpand(b)}>⤢ Ampliar</button>
-            <Downloads b={b} slug={slug} />
-          </div>
+          {!b.pendiente && (
+            <div className="post-figure-actions">
+              <button type="button" className="btn" onClick={() => onExpand(b)}>⤢ Ampliar</button>
+              <Downloads b={b} slug={slug} />
+            </div>
+          )}
         </div>
       )}
     </li>
@@ -268,13 +282,15 @@ export function FigureBlock({ b, className = '' }) {
       {b.numero > 0 && <span className="post-figure-num">Figura {b.numero}</span>}
       <h3>{calcTitle(b)}</h3>
       <CalcMeta b={b} />
-      {b.kind === 'sweep' && b.vista !== 'tabla' && (
+      {b.kind === 'sweep' && b.vista !== 'tabla' && !b.pendiente && (
         <label className="checkbox-label no-print"><input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} /> Eje vertical logarítmico</label>
       )}
-      <details className="post-howto no-print">
-        <summary>¿Cómo leer este gráfico?</summary>
-        <p>{HOW_TO_READ[howKey]}</p>
-      </details>
+      {!b.pendiente && (
+        <details className="post-howto no-print">
+          <summary>¿Cómo leer este gráfico?</summary>
+          <p>{HOW_TO_READ[howKey]}</p>
+        </details>
+      )}
       <FigureChart b={b} logY={logY} />
       {b.pie && <figcaption>{b.numero > 0 && <strong>Figura {b.numero}. </strong>}{b.pie}</figcaption>}
     </figure>
@@ -297,7 +313,7 @@ function ExpandedFigure({ b, onClose }) {
         </div>
         <h3>{calcTitle(b)}</h3>
         <CalcMeta b={b} />
-        {b.kind === 'sweep' && b.vista !== 'tabla' && (
+        {b.kind === 'sweep' && b.vista !== 'tabla' && !b.pendiente && (
           <label className="checkbox-label"><input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} /> Eje vertical logarítmico</label>
         )}
         <FigureChart b={b} logY={logY} />

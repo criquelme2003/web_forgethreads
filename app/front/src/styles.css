@@ -366,3 +366,8 @@ a.stat-link:hover{border-color:#9ca3af}
   .prose a[href^="#figura-"]{border:0}
   .post-figure-chart,.sankey-scroll,.post-table{overflow:visible!important;max-height:none!important}
 }
+.post-figure-pending{display:grid;gap:4px;padding:18px;border:1px dashed #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;color:var(--muted);text-align:center}
+.post-figure-pending strong{color:var(--text)}
+.post-pending-note{color:var(--warn)}
+.post-picker-query{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;border:1px dashed #d1d5db;border-radius:6px;margin-bottom:14px;flex-wrap:wrap}
+.post-num{min-width:0;width:96px}

@@ -18,7 +18,7 @@ Los cambios del lado del cluster están detallados en [scripts_wf_requerimientos
 
 **Implementado** (2026-10-26): análisis conjunto, con cálculo agregado y comparación de expertos (RF-24 a RF-26, RF-28), y barrido de simulación (RF-31 a RF-37, RNF-02). La estimación de duración del barrido usa coeficientes configurables (`SWEEP_*`) que hay que calibrar con barridos reales, y ambos dependen de que scripts_wf implemente `fe_job` con k ≥ 2 (T2), `sweep_job` (T3) y el estado `partial` del notifier (T1).
 
-**Implementado** (2026-10-27): blog de publicaciones (RF-56 a RF-58, RF-62 a RF-65). Por decisión del 2026-10-27, las publicaciones son **públicas** (sin enlace personal): reemplazan la lista de destinatarios y el acceso por enlace de RF-59 y RF-60, que quedan sin implementar, y cierran D-01.
+**Implementado** (2026-10-27): blog de publicaciones (RF-56 a RF-58, RF-62 a RF-66). Por decisión del 2026-10-27, las publicaciones son **públicas** (sin enlace personal): reemplazan la lista de destinatarios y el acceso por enlace de RF-59 y RF-60, que quedan sin implementar, y cierran D-01.
 
 ## Contexto
 
@@ -62,6 +62,7 @@ Los resultados no se muestran a los expertos en la app (RF-19). Se comunican con
 | RF-63 | **Figuras en barra lateral, con permiso** (2026-10-27). Las figuras (cálculos del proyecto con su vista: Sankey u hive con orden, origen y top guardados, tabla de caminos, efectos por orden o paneles del barrido) se muestran en una barra lateral, numeradas por orden de cita. Una figura se publica solo si el texto la cita (`{{fig:clave}}`) y el autor le da permiso; citar una figura sin permiso impide publicar. El gráfico público recibe solo los datos que dibuja (los caminos más fuertes, hasta 200 por orden) y nunca el ID del job. |
 | RF-64 | **Datos crudos descargables** (2026-10-27). Por cada figura publicada, el autor puede permitir descargar en CSV sus entradas (matrices CC, CE y EE de la versión usada de cada experto, anonimizados como en RF-58; o los parámetros de la simulación) y sus resultados completos (todos los caminos, los efectos por orden o el CSV crudo del barrido). Sin permiso, la descarga responde 404. |
 | RF-65 | **Edición y lectura más cómodas** (2026-10-27). En el editor, las figuras están en una barra lateral fija y se agregan o editan en un modal con vista previa del gráfico. Una figura puede mostrarse también en el cuerpo del texto, bajo la sección donde se cita por primera vez. En la vista pública, las figuras de la barra lateral son una lista que se despliega al hacer clic en ella o en su cita. La publicación se descarga en PDF con el diálogo de impresión del navegador («Guardar como PDF»), con todas las figuras y sin la interfaz. |
+| RF-66 | **Figuras de cálculos por ejecutar** (2026-10-27). Una figura puede buscar un cálculo en vez de apuntar a uno concreto: el más reciente del proyecto que cumpla los parámetros indicados (tipo, por experto o agregado, THR, orden máximo, N, c). Si el cálculo no existe, sigue en curso o sus resultados no se pueden leer, la figura se publica como «en preparación» y la vista previa avisa por qué; al volver a publicar se completa con el cálculo encontrado. Los datos de muestra incluyen una publicación por proyecto en ese estado. |
 
 ## 3. Proyecto de expertos
 
