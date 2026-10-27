@@ -190,3 +190,36 @@ details.card>summary{cursor:pointer;list-style:revert}
 .people{display:flex;flex-direction:column;gap:6px;margin:8px 0 12px}
 .people-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .link-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+
+/* barrido: paneles pequeños con ejes compartidos (una serie azul, régimen de c por forma) */
+.sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.sw-panel{margin:0;min-width:0}
+.sw-title{font-size:13px;font-weight:600;margin-bottom:2px}
+.sw-plot{position:relative;width:100%}
+.sw-plot svg{display:block}
+.sw-line{fill:none;stroke:#2a78d6;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.sw-band{fill:#2a78d6;fill-opacity:.1}
+.sw-err line{stroke:#2a78d6;stroke-width:1}
+.sw-mark{fill:#2a78d6;stroke:#fff;stroke-width:2}
+.sw-mark.is-hover{fill:#1d5aa6}
+.sw-ref{stroke:#d1d5db;stroke-width:1}
+.sw-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.sw-legend span{display:inline-flex;gap:5px;align-items:center}
+.combo-grid td.ok{color:var(--ok)}
+.combo-grid td.skip{color:var(--muted);background:#f9fafb}
+.compare-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
+.compare-grid>div{min-width:0}
+th.num{text-align:right}
+
+/* vistas del proyecto: pestañas bajo la cabecera, portada con resumen y pasos */
+.project-head{padding-bottom:0}
+.project-head h1 .pill,.project-head h1 .badge{vertical-align:middle;font-weight:600}
+.tabs{display:flex;gap:2px;margin:14px -20px 0;padding:0 12px;border-top:1px solid var(--border);overflow-x:auto}
+.tabs a{padding:10px 12px;font-size:13.5px;color:var(--muted);text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
+.tabs a:hover{color:var(--text)}
+.tabs a.active{color:var(--text);border-bottom-color:var(--text);font-weight:600}
+a.stat-link{text-decoration:none;color:inherit}
+a.stat-link:hover{border-color:#9ca3af}
+.steps{margin:0;padding-left:20px;display:grid;gap:6px;color:var(--text)}
+.labels{display:flex;gap:4px;flex-wrap:wrap}
+.labels .pill{color:var(--text)}

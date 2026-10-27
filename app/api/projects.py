@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.api.deps import (
@@ -21,10 +21,11 @@ from app.api.deps import (
     get_user_store,
     require_user,
 )
-from app.api.fe import launch_fe_job
+from app.api.fe import launch_fe_job, load_paths_tables
 from app.api.job_callback import JobStatusResponse, job_responses
 from app.api.links import front_link
 from app.core.config import Settings, get_settings
+from app.services.fe_compare import compare_paths
 from app.services.fe_input import MAX_LABELS
 from app.services.job_store import JobRecord, JobStore
 from app.services.mailer import MailError, build_invitation_message, send_mail
@@ -51,6 +52,9 @@ router = APIRouter(prefix="/app/projects", tags=["projects"])
 MAX_NAME = 200
 MAX_DESCRIPTION = 5000
 MAX_LABEL_CHARS = 100
+# Cota de seguridad del bootstrap mientras no se definan los límites de cálculo (P-03).
+MAX_REPS = 10_000
+MIN_AGGREGATE_INPUTS = 2
 
 
 def _clean_labels(labels: list[str] | None, side: str) -> list[str] | None:
@@ -290,6 +294,57 @@ class LaunchErrorOut(BaseModel):
 class ComputeResponse(BaseModel):
     lanzados: list[LaunchedOut]
     errores: list[LaunchErrorOut]
+
+
+class AggregateRequest(BaseModel):
+    """Cálculo agregado sobre varios expertos apilados (RF-24)."""
+
+    thr: float = Field(..., ge=0, le=1, description="Threshold de forgeffects")
+    maxorder: int = Field(..., ge=2, le=10, description="Orden máximo de los caminos")
+    reps: int = Field(..., ge=1, le=MAX_REPS, description="Repeticiones del bootstrap")
+    nodo: str | None = Field(default=None, description="Nodo objetivo; si se omite, se elige automáticamente")
+    input_ids: list[int] | None = Field(
+        default=None, description="Inputs a incluir; si se omite, todos los no excluidos"
+    )
+
+
+class AggregateResponse(BaseModel):
+    job_id: str
+    node: str
+    input_ids: list[int]
+
+
+class CompareColumn(BaseModel):
+    """Un cálculo por experto de la comparación (RF-26, RF-54)."""
+
+    job_id: str
+    input_id: int
+    email: str | None
+    nombre: str | None
+    input_version: int
+    desactualizado: bool
+    thr: float | None
+    maxorder: int | None
+
+
+class ComparePath(BaseModel):
+    path: list[str]
+    means: list[float | None]  # uno por columna, en el mismo orden que `columnas`
+    shared: int
+
+
+class CompareOrder(BaseModel):
+    order: int
+    columns: list[str]  # From, Through…, To
+    paths: list[ComparePath]
+
+
+class CompareResponse(BaseModel):
+    columnas: list[CompareColumn]
+    causes: list[str]
+    effects: list[str]
+    orders: list[CompareOrder]
+    warnings: list[str]
 
 
 # --- helpers ---------------------------------------------------------------------------------
@@ -779,6 +834,22 @@ async def update_input(
     return _input_out(item, inv, jobs)
 
 
+async def _select_inputs(
+    project_id: int, input_ids: list[int] | None, projects: ProjectStore
+) -> list[ExpertInput]:
+    """Los inputs pedidos (404 si alguno no existe) o, si no se indican, los no excluidos."""
+    inputs = await projects.list_inputs(project_id)
+    if input_ids is None:
+        return [i for i in inputs if not i.excluido]
+    by_id = {i.id: i for i in inputs}
+    unknown = [i for i in input_ids if i not in by_id]
+    if unknown:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"Inputs inexistentes: {', '.join(map(str, unknown))}"
+        )
+    return [by_id[i] for i in dict.fromkeys(input_ids)]
+
+
 @router.post("/{project_id}/compute", response_model=ComputeResponse)
 async def compute_inputs(
     project_id: int,
@@ -797,17 +868,7 @@ async def compute_inputs(
     error se informa en `errores` (RF-23: se reintenta lanzando de nuevo).
     """
     project = await _expert_project(project_id, projects, user)
-    inputs = await projects.list_inputs(project_id)
-    if body.input_ids is None:
-        selected = [i for i in inputs if not i.excluido]
-    else:
-        by_id = {i.id: i for i in inputs}
-        unknown = [i for i in body.input_ids if i not in by_id]
-        if unknown:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, f"Inputs inexistentes: {', '.join(map(str, unknown))}"
-            )
-        selected = [by_id[i] for i in dict.fromkeys(body.input_ids)]
+    selected = await _select_inputs(project_id, body.input_ids, projects)
     if not selected:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No hay inputs para calcular")
 
@@ -825,3 +886,111 @@ async def compute_inputs(
             continue
         lanzados.append(LaunchedOut(input_id=item.id, job_id=job_id, node=node))
     return ComputeResponse(lanzados=lanzados, errores=errores)
+
+
+# --- análisis conjunto (RF-24 a RF-26) ---------------------------------------------------------
+
+
+@router.post("/{project_id}/aggregate", response_model=AggregateResponse)
+async def aggregate_inputs(
+    project_id: int,
+    body: AggregateRequest,
+    user: CurrentUser,
+    settings: Annotated[Settings, Depends(get_settings)],
+    projects: Projects,
+    store: Annotated[JobStore, Depends(get_job_store)],
+    pool: Annotated[SSHConnectionPool, Depends(get_ssh_pool)],
+    selector: Annotated[NodeSelector, Depends(get_node_selector)],
+) -> AggregateResponse:
+    """Lanza forgeffects sobre los inputs elegidos apilados (k ≥ 2), con bootstrap (RF-24).
+
+    Usa la versión vigente de cada input y guarda cuáles incluyó (RF-25). Se pueden lanzar
+    varios agregados, con distintos inputs o parámetros.
+    """
+    project = await _expert_project(project_id, projects, user)
+    selected = await _select_inputs(project_id, body.input_ids, projects)
+    if len(selected) < MIN_AGGREGATE_INPUTS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"El cálculo agregado necesita al menos {MIN_AGGREGATE_INPUTS} inputs (hay {len(selected)})",
+        )
+    matrices = [input_matrices(item) for item in selected]
+    cc, ce, ee = (np.stack([m[i] for m in matrices]) for i in range(3))
+    job_id, node = await launch_fe_job(
+        pool=pool, store=store, selector=selector, settings=settings, nodo=body.nodo,
+        cc=cc, ce=ce, ee=ee, causes=project.causas, effects=project.efectos,
+        thr=body.thr, maxorder=body.maxorder, reps=body.reps, project_id=project.id, user_id=user.id,
+        extra_params={"inputs": [{"input_id": i.id, "version": i.version} for i in selected]},
+    )
+    return AggregateResponse(job_id=job_id, node=node, input_ids=[i.id for i in selected])
+
+
+@router.get("/{project_id}/compare", response_model=CompareResponse)
+async def compare_computations(
+    project_id: int,
+    user: CurrentUser,
+    settings: Annotated[Settings, Depends(get_settings)],
+    projects: Projects,
+    store: Annotated[JobStore, Depends(get_job_store)],
+    pool: Annotated[SSHConnectionPool, Depends(get_ssh_pool)],
+    job_ids: Annotated[list[str] | None, Query(description="Cálculos por experto a comparar")] = None,
+) -> CompareResponse:
+    """Caminos de varios expertos lado a lado: el `Mean` de cada uno y cuántos comparten cada camino (RF-26)."""
+    project = await _expert_project(project_id, projects, user)
+    ids = list(dict.fromkeys(job_ids or []))
+    if len(ids) < 2:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Elige al menos dos cálculos para comparar")
+    by_id = {j.job_id: j for j in await store.list_by_project(project_id)}
+    records: list[JobRecord] = []
+    for job_id in ids:
+        record = by_id.get(job_id)
+        if record is None or record.kind != "fe":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"El cálculo {job_id} no es de este proyecto")
+        if record.input_id is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"El cálculo {job_id} no es de un experto (es un agregado)"
+            )
+        if record.status != "success":
+            raise HTTPException(status.HTTP_409_CONFLICT, f"El cálculo {job_id} está en estado {record.status}")
+        records.append(record)
+    repeated = {r.input_id for r in records if sum(x.input_id == r.input_id for x in records) > 1}
+    if repeated:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Elige un solo cálculo por experto para compararlos"
+        )
+
+    tables = [await load_paths_tables(r, settings, pool) for r in records]
+    authors = await projects.input_authors([r.input_id for r in records])
+    columnas = []
+    for r in records:
+        author = authors.get(r.input_id)
+        params = r.params or {}
+        columnas.append(
+            CompareColumn(
+                job_id=r.job_id, input_id=r.input_id, email=author.email if author else None,
+                nombre=author.nombre if author else None, input_version=r.input_version or 1,
+                desactualizado=bool(author and (r.input_version or 1) < author.version),
+                thr=params.get("thr"), maxorder=params.get("maxorder"),
+            )
+        )
+    warnings = []
+    for key, label in (("thr", "THR"), ("maxorder", "orden máximo")):
+        values = {c.model_dump()[key] for c in columnas}
+        if len(values) > 1:
+            shown = ", ".join(str(v) for v in sorted(values, key=lambda v: (v is None, v)))
+            warnings.append(f"Los cálculos usan distinto {label} ({shown}): la comparación no es directa")
+
+    compared = compare_paths([[(t.order, t.columns, t.rows) for t in ts] for ts in tables])
+    return CompareResponse(
+        columnas=columnas,
+        causes=project.causas,
+        effects=project.efectos,
+        orders=[
+            CompareOrder(
+                order=o.order, columns=o.columns,
+                paths=[ComparePath(path=p.path, means=p.means, shared=p.shared) for p in o.paths],
+            )
+            for o in compared
+        ],
+        warnings=warnings,
+    )

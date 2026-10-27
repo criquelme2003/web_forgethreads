@@ -58,9 +58,11 @@ spec:
                 key: POSTGRES_PASSWORD
           - name: DATABASE_URL
             value: postgresql://wf:$(POSTGRES_PASSWORD)@wf-postgres:5432/wf
-          # El volumen guarda los resultados descargados del cluster (CSV de caminos).
+          # El volumen guarda los resultados descargados del cluster (CSV de caminos y de barridos).
           - name: FE_RESULTS_DIR
             value: /code/data/fe_results
+          - name: SWEEP_RESULTS_DIR
+            value: /code/data/sweep_results
         volumeMounts:
           - name: data
             mountPath: /code/data

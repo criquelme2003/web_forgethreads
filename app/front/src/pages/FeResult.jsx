@@ -261,7 +261,7 @@ export default function FeResult() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
           <h1>Caminos · job <span className="mono">{job.job_id}</span></h1>
           {job.project_id != null
-            ? <Link to={`/projects/${job.project_id}`} className="small muted">← proyecto</Link>
+            ? <Link to={`/projects/${job.project_id}/${job.expertos ? 'lote' : 'individual'}`} className="small muted">← {job.expertos ? 'agregados' : 'por experto'}</Link>
             : <Link to="/fe" className="small muted">nuevo cálculo →</Link>}
         </div>
         <div className="kv">
@@ -276,6 +276,18 @@ export default function FeResult() {
                   <>{' '}<span className="badge outdated" title={`El experto modificó su input (versión vigente: ${job.experto.version_vigente})`}>input modificado</span></>
                 )}
               </span>
+            </>
+          )}
+          {job.expertos && (
+            <>
+              <span>Agregado de</span>
+              <span className="small">
+                {job.expertos.length} expertos: {job.expertos.map((e) => `${e.nombre || e.email} (v${e.input_version})`).join(', ')}
+                {job.expertos.some((e) => e.input_version < e.version_vigente) && (
+                  <>{' '}<span className="badge outdated" title="Algún experto modificó su input después de este cálculo">input modificado</span></>
+                )}
+              </span>
+              <span>Repeticiones</span><span>{params.reps ?? '—'} (bootstrap)</span>
             </>
           )}
           <span>Nodo</span><span>{job.node}</span>

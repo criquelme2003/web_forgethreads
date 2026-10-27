@@ -82,7 +82,7 @@ export default function MaxMinResult() {
       <div className="card">
         <div className="small">
           {job.project_id != null
-            ? <Link to={`/projects/${job.project_id}`} className="muted">← proyecto</Link>
+            ? <Link to={`/projects/${job.project_id}/individual`} className="muted">← cálculos MaxMin</Link>
             : <Link to="/jobs" className="muted">← trabajos</Link>}
         </div>
         <h1>MaxMin · job <span className="mono">{job.job_id}</span></h1>

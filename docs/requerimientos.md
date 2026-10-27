@@ -16,6 +16,8 @@ Los cambios del lado del cluster están detallados en [scripts_wf_requerimientos
 
 **Implementado** (2026-10-19): roles, alta y desactivación de admins, co-admins y filtro por membresía (RF-01 a RF-05, RF-48, RF-49); invitaciones con nombre, edición del input con versiones, reenvío por lotes, eliminación y atribución (RF-10, RF-11, RF-19, RF-20, RF-50 a RF-54); RF-55. Queda pendiente el reporte (RF-56 a RF-60), que depende de D-01.
 
+**Implementado** (2026-10-26): análisis conjunto, con cálculo agregado y comparación de expertos (RF-24 a RF-26, RF-28), y barrido de simulación (RF-31 a RF-37, RNF-02). La estimación de duración del barrido usa coeficientes configurables (`SWEEP_*`) que hay que calibrar con barridos reales, y ambos dependen de que scripts_wf implemente `fe_job` con k ≥ 2 (T2), `sweep_job` (T3) y el estado `partial` del notifier (T1).
+
 ## Contexto
 
 La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálculos MaxMin sueltos en el cluster SLURM (`new_job.sh` + `notifier.sh` encadenado, callback a `/app/job_callback`). Los nuevos requerimientos introducen la entidad **proyecto**, con dos tipos:
@@ -41,6 +43,7 @@ La aplicación hoy permite a un único usuario (definido en `.env`) lanzar cálc
 |---|---|
 | RF-06 | Un proyecto tiene nombre, descripción, tipo (`expertos` \| `simulacion`), dueño, co-admins y estado. |
 | RF-07 | Los jobs MaxMin existentes se migran a un proyecto de simulación del superadmin. |
+| RF-61 | **Vistas del proyecto** (2026-10-27). Cada proyecto se organiza en tres pestañas con su propia URL: **Proyecto** (`/projects/<id>`, la que se abre por defecto), introductoria: descripción, tipo, estado, etiquetas, dueño, un resumen con cifras, los pasos de trabajo del tipo de proyecto, administradores e invitaciones; **cálculos individuales** (`/individual`): en expertos, los inputs, el cálculo por experto y la comparación; en simulación, MaxMin individual; y **cálculos por lote** (`/lote`): en expertos, el cálculo agregado; en simulación, los barridos. |
 
 ### 2.1 Reporte y difusión de resultados
 
@@ -101,7 +104,7 @@ Los resultados no se muestran a los expertos en la app (RF-19). Se comunican con
 
 | ID | Requerimiento |
 |---|---|
-| RF-24 | **Cálculo agregado**: el admin lanza `FE` sobre los inputs no excluidos apilados (`k` expertos, `k ≥ 2`). El admin define `reps` del bootstrap, `THR` y `maxorder`. El resultado incluye `Count`, `Mean` y `SD`. |
+| RF-24 | **Cálculo agregado**: el admin lanza `FE` sobre los inputs que elige apilados (por defecto, los no excluidos) (`k` expertos, `k ≥ 2`). El admin define `reps` del bootstrap, `THR` y `maxorder`. El resultado incluye `Count`, `Mean` y `SD`. |
 | RF-25 | Se pueden lanzar varios cálculos agregados; cada uno registra qué inputs incluyó. |
 | RF-26 | **Comparación**: Sankeys de los expertos elegidos lado a lado, y una tabla de caminos con una columna por experto (si tiene el camino y su `Mean`) más el número de expertos que lo comparten. |
 

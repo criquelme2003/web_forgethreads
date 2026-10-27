@@ -6,6 +6,8 @@ import GpuStatus from './pages/GpuStatus.jsx';
 import ClusterStatus from './pages/ClusterStatus.jsx';
 import FeExecute from './pages/FeExecute.jsx';
 import FeResult from './pages/FeResult.jsx';
+import FeCompare from './pages/FeCompare.jsx';
+import SweepResult from './pages/SweepResult.jsx';
 import MaxMinResult from './pages/MaxMinResult.jsx';
 import Projects from './pages/Projects.jsx';
 import ProjectDetail from './pages/ProjectDetail.jsx';
@@ -24,7 +26,9 @@ export default function App() {
         <Route path="/activate/:token" element={<Activate />} />
         <Route element={<Layout />}>
           <Route path="/projects" element={<Projects />} />
-          <Route path="/projects/:projectId" element={<ProjectDetail />} />
+          <Route path="/projects/:projectId/compare" element={<FeCompare />} />
+          {/* Vistas del proyecto: portada (sin :tab), cálculos individuales ("individual") y por lote ("lote"). */}
+          <Route path="/projects/:projectId/:tab?" element={<ProjectDetail />} />
           <Route path="/users" element={<Users />} />
           {/* MaxMin ahora se lanza dentro de un proyecto de simulación. */}
           <Route path="/parameters" element={<Navigate to="/projects" replace />} />
@@ -35,6 +39,7 @@ export default function App() {
           <Route path="/fe" element={<FeExecute />} />
           <Route path="/fe/jobs/:jobId" element={<FeResult />} />
           <Route path="/maxmin/jobs/:jobId" element={<MaxMinResult />} />
+          <Route path="/sweeps/:jobId" element={<SweepResult />} />
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Route>

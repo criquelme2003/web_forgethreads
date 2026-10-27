@@ -14,7 +14,8 @@ function badgeClass(s) {
   return ['pending', 'success', 'partial'].includes(s) ? s : 'error';
 }
 
-const KIND_LABELS = { maxmin: 'MaxMin', fe: 'Caminos' };
+const KIND_LABELS = { maxmin: 'MaxMin', fe: 'Caminos', sweep: 'Barrido' };
+const JOB_PATHS = { fe: 'fe/jobs', sweep: 'sweeps', maxmin: 'maxmin/jobs' };
 
 export default function Jobs() {
   const navigate = useNavigate();
@@ -85,17 +86,17 @@ export default function Jobs() {
               <tr><td colSpan="9" className="empty">Sin trabajos {emptyLabel}</td></tr>
             )}
             {jobs !== null && jobs.map((j) => (
-              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => navigate(j.kind === 'fe' ? `/fe/jobs/${j.job_id}` : `/maxmin/jobs/${j.job_id}`)}>
+              <tr key={j.job_id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/${JOB_PATHS[j.kind] || 'maxmin/jobs'}/${j.job_id}`)}>
                 <td className="mono">{j.job_id}</td>
                 <td>{KIND_LABELS[j.kind] || j.kind}</td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {j.project_id != null ? <Link to={`/projects/${j.project_id}`}>#{j.project_id}</Link> : '—'}
                 </td>
-                <td className="small">{j.experto ? j.experto.nombre || j.experto.email : '—'}</td>
+                <td className="small">{j.experto ? j.experto.nombre || j.experto.email : j.expertos ? `agregado de ${j.expertos.length}` : '—'}</td>
                 <td><span className={`badge ${badgeClass(j.status)}`}>{j.status}</span></td>
                 <td>{j.node}</td>
                 <td className="small">{fmt(j.created_at)}</td>
-                <td>{j.kind === 'fe' ? (j.result?.orders?.length ? Math.max(...j.result.orders) : '—') : (j.effective_order ?? '—')}</td>
+                <td>{j.kind === 'fe' ? (j.result?.orders?.length ? Math.max(...j.result.orders) : '—') : j.kind === 'sweep' ? '—' : (j.effective_order ?? '—')}</td>
                 <td>{j.computation_time_s != null ? j.computation_time_s.toFixed(2) : '—'}</td>
               </tr>
             ))}

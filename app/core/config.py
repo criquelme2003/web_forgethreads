@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     database_url: str | None = None
     jobs_db_path: str = "data/jobs.db"
     fe_results_dir: str = "data/fe_results"  # caché local de los CSV de caminos descargados de fe_job
+    sweep_results_dir: str = "data/sweep_results"  # caché local de los CSV crudos de los barridos
+
+    # --- Barridos (RNF-02) ---
+    # Duración estimada de una repetición: base + coeficiente × (N/1000)³ segundos. Son valores de
+    # partida: calibrarlos con el `computation-time(s)` de barridos reales.
+    sweep_run_base_s: float = 1.0
+    sweep_run_s_per_kn3: float = 2.0
+    sweep_time_margin: float = 1.5  # el --time pedido a SLURM es la estimación × margen + sobrecarga
+    sweep_overhead_s: int = 600  # carga del entorno y calentamiento de la GPU
+    sweep_max_hours: float = 72  # se rechazan los barridos cuyo --time supere este máximo
 
     # --- Invitaciones a expertos ---
     invitation_ttl_days: int = 14  # vigencia del enlace de invitación (RF-10)

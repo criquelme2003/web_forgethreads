@@ -59,9 +59,17 @@ class JobStatusResponse(BaseModel):
     project_id: int | None = None
     input_id: int | None = None
     experto: ExpertRef | None = None
+    expertos: list[ExpertRef] | None = None  # expertos incluidos en un cálculo agregado (RF-25)
 
     @classmethod
-    def from_record(cls, r: JobRecord, author: InputAuthor | None = None) -> "JobStatusResponse":
+    def from_record(
+        cls,
+        r: JobRecord,
+        author: InputAuthor | None = None,
+        authors: dict[int, InputAuthor] | None = None,
+    ) -> "JobStatusResponse":
+        """`author`: experto de un cálculo por experto; `authors`: los de un agregado, por input."""
+        included = aggregate_inputs(r)
         return cls(
             job_id=r.job_id,
             status=r.status,
@@ -82,13 +90,34 @@ class JobStatusResponse(BaseModel):
             )
             if author
             else None,
+            expertos=[
+                ExpertRef(
+                    input_id=a.input_id, email=a.email, nombre=a.nombre,
+                    input_version=version, version_vigente=a.version,
+                )
+                for a, version in (((authors or {}).get(i), v) for i, v in included)
+                if a is not None
+            ]
+            if included
+            else None,
         )
 
 
+def aggregate_inputs(record: JobRecord) -> list[tuple[int, int]]:
+    """(input_id, versión) de cada experto incluido en un cálculo agregado; vacío si no lo es."""
+    return [
+        (int(i["input_id"]), int(i.get("version") or 1))
+        for i in (record.params or {}).get("inputs") or []
+        if isinstance(i, dict) and i.get("input_id") is not None
+    ]
+
+
 async def job_responses(records: list[JobRecord], projects: ProjectStore) -> list[JobStatusResponse]:
-    """Respuestas con el experto de cada cálculo, si viene de un input (RF-54)."""
-    authors = await projects.input_authors([r.input_id for r in records if r.input_id is not None])
-    return [JobStatusResponse.from_record(r, authors.get(r.input_id)) for r in records]
+    """Respuestas con el experto de cada cálculo, o los de un agregado (RF-54)."""
+    ids = [r.input_id for r in records if r.input_id is not None]
+    ids += [i for r in records for i, _ in aggregate_inputs(r)]
+    authors = await projects.input_authors(ids)
+    return [JobStatusResponse.from_record(r, authors.get(r.input_id), authors) for r in records]
 
 
 async def can_see_job(record: JobRecord, user: User, projects: ProjectStore) -> bool:

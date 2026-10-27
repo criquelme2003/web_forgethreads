@@ -20,7 +20,7 @@ from app.api.deps import (
     get_ssh_pool,
     require_user,
 )
-from app.api.job_callback import get_visible_job
+from app.api.job_callback import aggregate_inputs, get_visible_job
 from app.api.launch import submit_with_failover
 from app.core.config import Settings, get_settings
 from app.services.fe_input import FeInput, load_fe_input
@@ -129,12 +129,17 @@ async def launch_fe_job(
     effects: list[str],
     thr: float,
     maxorder: int,
+    reps: int = SINGLE_EXPERT_REPS,
     project_id: int | None = None,
     input_id: int | None = None,
     input_version: int | None = None,
     user_id: int | None = None,
+    extra_params: dict | None = None,
 ) -> tuple[str, str]:
     """Sube las matrices al nodo por SFTP y lanza fe_job.sh + notifier. Devuelve (JOBID, nodo).
+
+    `cc`, `ce` y `ee` son las matrices de un experto o los tensores (k, filas, cols) de varios
+    apilados (cálculo agregado, RF-24). `extra_params` se guarda junto a los parámetros del job.
 
     Si `nodo` es None se elige automáticamente, con failover: si la subida o el sbatch fallan
     en un nodo, se vuelve a subir el input al siguiente (RF-46).
@@ -145,7 +150,7 @@ async def launch_fe_job(
         "effects": effects,
         "thr": thr,
         "maxorder": maxorder,
-        "reps": SINGLE_EXPERT_REPS,
+        "reps": reps,
     }
     files = build_fe_input_files(cc, ce, ee, meta)
 
@@ -166,7 +171,7 @@ async def launch_fe_job(
         prepare=prepare,
         script="fe_job.sh",
         kind="fe",
-        params={**meta, "request_id": request_id},
+        params={**meta, "request_id": request_id, **(extra_params or {})},
         project_id=project_id,
         input_id=input_id,
         input_version=input_version,
@@ -281,6 +286,16 @@ def _read_table(path: Path, order: int, hidden: tuple[str, ...]) -> PathsTable:
     return PathsTable(order=order, columns=[header[i] for i in keep], rows=rows)
 
 
+async def load_paths_tables(
+    record: JobRecord, settings: Settings, pool: SSHConnectionPool, hidden: tuple[str, ...] = ()
+) -> list[PathsTable]:
+    """Tablas de caminos de un job terminado, una por orden (descargadas del nodo la primera vez)."""
+    local_dir = await _ensure_local_results(record, settings, pool)
+    return [
+        _read_table(local_dir / f"paths_order_{o}.csv", o, hidden) for o in _result_orders(record)
+    ]
+
+
 @router.get("/app/fe/jobs/{job_id}/paths", response_model=FePathsResponse)
 async def get_fe_paths(
     job_id: str,
@@ -292,7 +307,6 @@ async def get_fe_paths(
 ) -> FePathsResponse:
     """Tablas de caminos por orden (From, Through…, To, Mean). Se descargan del nodo la primera vez."""
     record = await _get_fe_record(job_id, user, store, projects)
-    local_dir = await _ensure_local_results(record, settings, pool)
     k = (record.result or {}).get("k")
     hidden = SINGLE_EXPERT_HIDDEN_COLUMNS if k == 1 else ()
     params = record.params or {}
@@ -301,9 +315,7 @@ async def get_fe_paths(
         k=k,
         causes=params.get("causes", []),
         effects=params.get("effects", []),
-        tables=[
-            _read_table(local_dir / f"paths_order_{o}.csv", o, hidden) for o in _result_orders(record)
-        ],
+        tables=await load_paths_tables(record, settings, pool, hidden),
     )
 
 
@@ -319,7 +331,7 @@ async def download_fe_paths_csv(
 ) -> FileResponse:
     """CSV crudo de un orden, tal como lo escribió fe_job en el nodo.
 
-    El nombre del archivo indica el experto del cálculo, si lo hay (RF-54).
+    El nombre del archivo indica el experto del cálculo o cuántos incluye un agregado (RF-54).
     """
     record = await _get_fe_record(job_id, user, store, projects)
     if order not in _result_orders(record):
@@ -328,6 +340,9 @@ async def download_fe_paths_csv(
     filename = f"paths_order_{order}.csv"
     authors = await projects.input_authors([record.input_id]) if record.input_id else {}
     expert = _filename_part(authors.get(record.input_id))
+    included = aggregate_inputs(record)
+    if included:
+        expert = f"agregado_{len(included)}_expertos"
     return FileResponse(
         local_dir / filename,
         media_type="text/csv",
