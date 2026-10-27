@@ -371,3 +371,5 @@ a.stat-link:hover{border-color:#9ca3af}
 .post-pending-note{color:var(--warn)}
 .post-picker-query{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;border:1px dashed #d1d5db;border-radius:6px;margin-bottom:14px;flex-wrap:wrap}
 .post-num{min-width:0;width:96px}
+.post-select{display:block;width:100%;margin:8px 0;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;color:var(--text)}
+.post-select:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px var(--ring)}

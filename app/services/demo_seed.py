@@ -90,16 +90,16 @@ async def seed_demo(projects: ProjectStore, owner_id: int | None = None) -> list
 
 # Cálculos que buscan las publicaciones de muestra: ejecutarlos y volver a publicar.
 DEMO_CALCULATIONS = [
-    (DEMO_EXPERT_PROJECT, "cálculo por experto con THR 0,5 y orden máximo 3"),
-    (DEMO_SIMULATION_PROJECT, "MaxMin con N = 1000, c = 2,5 y THR 0,5"),
-    (DEMO_SIMULATION_PROJECT, "barrido con THR 0,5 (cualquier lista de N y c)"),
+    (DEMO_EXPERT_PROJECT, "cálculo por experto con THR 0,2 y orden máximo 3"),
+    (DEMO_SIMULATION_PROJECT, "MaxMin con N = 1000, c = 2,5 y THR 0,2"),
+    (DEMO_SIMULATION_PROJECT, "barrido con THR 0,2 (cualquier lista de N y c)"),
 ]
 
-_EXPERT_QUERY = {"kind": "fe", "agregado": False, "thr": 0.5, "maxorder": 3,
-                 "descripcion": "Cálculo por experto con THR 0,5 y orden máximo 3"}
-_MAXMIN_QUERY = {"kind": "maxmin", "n": 1000, "c": 2.5, "thr": 0.5,
-                 "descripcion": "MaxMin sobre una red de 1000 nodos con c = 2,5 y THR 0,5"}
-_SWEEP_QUERY = {"kind": "sweep", "thr": 0.5, "descripcion": "Barrido de N y c con THR 0,5"}
+_EXPERT_QUERY = {"kind": "fe", "agregado": False, "thr": 0.2, "maxorder": 3,
+                 "descripcion": "Cálculo por experto con THR 0,2 y orden máximo 3"}
+_MAXMIN_QUERY = {"kind": "maxmin", "n": 1000, "c": 2.5, "thr": 0.2,
+                 "descripcion": "MaxMin sobre una red de 1000 nodos con c = 2,5 y THR 0,2"}
+_SWEEP_QUERY = {"kind": "sweep", "thr": 0.2, "descripcion": "Barrido de N y c con THR 0,2"}
 
 DEMO_POSTS = [
     {
@@ -112,7 +112,7 @@ DEMO_POSTS = [
             "Publicación de muestra que recorre las funciones del blog con el proyecto «Demo · Expertos». "
             "Un experto evaluó la incidencia entre cuatro causas (precio, publicidad, capacitación y tecnología) "
             "y tres efectos (ventas, costos y clima laboral). Las figuras se completan cuando se ejecuta el "
-            "cálculo por experto con THR 0,5 y orden máximo 3."
+            "cálculo por experto con THR 0,2 y orden máximo 3."
         ),
         "bloques": [
             (
@@ -126,7 +126,7 @@ DEMO_POSTS = [
                 "| Matriz | Relaciona | Tamaño |\n|---|---|---|\n| CC | causas con causas | 4 × 4 |\n"
                 "| CE | causas con efectos | 4 × 3 |\n| EE | efectos con efectos | 3 × 3 |\n\n"
                 "Sobre ellas se buscaron los efectos olvidados con "
-                "[forgeffects](https://github.com/claudio-araya/forgeffects), con un umbral (THR) de 0,5 y "
+                "[forgeffects](https://github.com/claudio-araya/forgeffects), con un umbral (THR) de 0,2 y "
                 "caminos de hasta 3 pasos."
             ),
             (
@@ -165,8 +165,8 @@ DEMO_POSTS = [
         "resumen": (
             "Publicación de muestra con el proyecto «Demo · Simulación». Muestra cuántos efectos aparecen en cada "
             "orden de la composición MaxMin y cómo cambia el orden efectivo con el tamaño de la red y su "
-            "conectividad. Las figuras se completan al ejecutar un MaxMin (N = 1000, c = 2,5, THR 0,5) y un "
-            "barrido con THR 0,5."
+            "conectividad. Las figuras se completan al ejecutar un MaxMin (N = 1000, c = 2,5, THR 0,2) y un "
+            "barrido con THR 0,2."
         ),
         "bloques": [
             (
@@ -175,7 +175,7 @@ DEMO_POSTS = [
             ),
             (
                 "## Metodología\n\nSe generan redes aleatorias de N nodos con conectividad promedio c y se aplica "
-                "MaxMin con un umbral de 0,5. Un barrido repite el cálculo para varias combinaciones de N y c."
+                "MaxMin con un umbral de 0,2. Un barrido repite el cálculo para varias combinaciones de N y c."
             ),
             (
                 "## Resultados\n\nLa {{fig:m1}} muestra los efectos encontrados en cada orden para una red de 1000 "
@@ -197,6 +197,18 @@ DEMO_POSTS = [
 ]
 
 
+# Las primeras publicaciones de muestra buscaban cálculos con THR 0,5, que dejaban las figuras
+# sin resultados; si siguen con esa búsqueda (nadie la cambió), se actualizan a THR 0,2.
+_OUTDATED_THR = 0.5
+
+
+def _outdated_demo(post) -> bool:
+    return any(
+        (f.get("buscar") or {}).get("thr") == _OUTDATED_THR and "THR 0,5" in (f.get("buscar") or {}).get("descripcion", "")
+        for f in post.figuras
+    )
+
+
 async def seed_demo_posts(
     projects: ProjectStore,
     posts: PostStore,
@@ -205,17 +217,23 @@ async def seed_demo_posts(
     settings: Settings,
     pool=None,
 ) -> list[str]:
-    """Crea y publica las publicaciones de muestra que falten. Devuelve sus direcciones."""
+    """Crea y publica las publicaciones de muestra que falten (o que sigan con la búsqueda antigua).
+
+    Devuelve sus direcciones.
+    """
     from fastapi import HTTPException
 
     from app.api.posts import Figure, PostUpdate, _Renderer
 
     by_name = {p.nombre: p for p in await projects.list_projects()}
-    existing = {p.slug for p in await posts.list_all()}
+    existing = {p.slug: p for p in await posts.list_all()}
     created: list[str] = []
     for spec in DEMO_POSTS:
         project = by_name.get(spec["project"])
-        if project is None or spec["slug"] in existing:
+        if project is None:
+            continue
+        current = existing.get(spec["slug"])
+        if current is not None and not _outdated_demo(current):
             continue
         body = PostUpdate(
             slug=spec["slug"], resumen=spec["resumen"], autores=spec["autores"],
@@ -223,7 +241,7 @@ async def seed_demo_posts(
             bloques=[{"tipo": "texto", "markdown": md} for md in spec["bloques"]],
             figuras=spec["figuras"],
         )
-        post = await posts.create(
+        post = current or await posts.create(
             titulo=spec["titulo"], resumen="", project_id=project.id, autor_id=owner.id, bloques=[],
         )
         post = await posts.update(
@@ -239,7 +257,7 @@ async def seed_demo_posts(
             logger.warning("No se pudo publicar %s: %s", spec["slug"], e.detail)
         created.append(spec["slug"])
     if created:
-        logger.info("Publicaciones de muestra creadas: %s", ", ".join(created))
+        logger.info("Publicaciones de muestra creadas o actualizadas: %s", ", ".join(created))
     return created
 
 

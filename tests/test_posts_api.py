@@ -400,3 +400,38 @@ def test_figure_waits_for_a_calculation_not_yet_run(env) -> None:
     fig = client.get("/app/blog/pendiente").json()["figuras"][0]
     assert "pendiente" not in fig and fig["meta"]["n"] == 100 and "job_id" not in fig
     assert client.get("/app/blog/pendiente/figuras/1/resultados.csv").text == "orden,efectos\n1,9\n"
+
+
+def test_figure_without_results_is_not_left_in_preparation(env) -> None:
+    """Un cálculo que terminó sin resultados no deja la figura «en preparación» para siempre."""
+    client = env["client"]
+    sim = client.post("/app/projects", json={"nombre": "Sim", "tipo": "simulacion"}).json()
+    post = client.post("/app/posts", json={"titulo": "Sin datos", "project_id": sim["id"], "plantilla": False}).json()
+    query = {"kind": "maxmin", "n": 100, "c": 2.5, "thr": 0.2}
+    figura = {"ref": "m", "buscar": query, "vista": "efectos", "publico": True}
+    body = {"bloques": [_text("Ver {{fig:m}}.")], "figuras": [figura]}
+    assert client.patch(f"/app/posts/{post['id']}", json=body).status_code == 200
+
+    def preview_fig():
+        return client.post(f"/app/posts/{post['id']}/figure-preview", json=figura).json()
+
+    # Hay un MaxMin con otro THR: el aviso lo menciona para que se note el desajuste.
+    params = {"numero_nodos": 100, "conectividad_promedio": 2.5}
+    _finished_job(env, "801", "maxmin", sim["id"], logs="", params={**params, "threshold": 0.5})
+    fig = preview_fig()
+    assert fig["estado"] == "en_preparacion" and "otros parámetros: N 100, c 2.5, THR 0.5" in fig["motivo"]
+
+    # El que cumple terminó con error: «sin resultados», no «en preparación».
+    _finished_job(env, "802", "maxmin", sim["id"], status="error", logs="", params={**params, "threshold": 0.2})
+    fig = preview_fig()
+    assert fig["estado"] == "sin_resultados" and "job 802" in fig["motivo"]
+    preview = client.get(f"/app/posts/{post['id']}/preview").json()
+    assert any("«sin resultados»" in a for a in preview["avisos"])
+    client.post(f"/app/posts/{post['id']}/publish")
+    assert client.get("/app/blog/sin-datos").json()["figuras"][0]["estado"] == "sin_resultados"
+
+    # Terminó bien pero sin efectos: se dibuja vacía y la vista previa sugiere bajar el umbral.
+    _finished_job(env, "803", "maxmin", sim["id"], logs="sin efectos", params={**params, "threshold": 0.2})
+    preview = client.get(f"/app/posts/{post['id']}/preview").json()
+    assert preview["figuras"][0]["datos"]["effects_by_order"] == []
+    assert any("no tiene datos con estos parámetros (THR 0.2)" in a for a in preview["avisos"])

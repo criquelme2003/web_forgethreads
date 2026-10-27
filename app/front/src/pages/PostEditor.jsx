@@ -73,6 +73,13 @@ function resolveJob(fig, jobs) {
   return found[0] || null;
 }
 
+/** El cálculo buscado ya terminó sin resultados (error) y no hay otro en curso ni terminado. */
+function failedOnly(fig, jobs) {
+  if (!jobs || !fig.buscar) return false;
+  const found = jobs.filter((j) => matches(fig.buscar, j));
+  return found.length > 0 && found.every((j) => !publishable(j) && j.status !== 'pending');
+}
+
 function queryLabel(q) {
   if (q.descripcion) return q.descripcion;
   let s = { fe: 'Cálculo de caminos', maxmin: 'Cálculo MaxMin', sweep: 'Barrido' }[q.kind];
@@ -83,8 +90,8 @@ function queryLabel(q) {
 
 function defaultQuery(tipo) {
   return tipo === 'simulacion'
-    ? { kind: 'maxmin', thr: 0.5, descripcion: '' }
-    : { kind: 'fe', agregado: false, thr: 0.5, maxorder: 3, descripcion: '' };
+    ? { kind: 'maxmin', thr: 0.2, descripcion: '' }
+    : { kind: 'fe', agregado: false, thr: 0.2, maxorder: 3, descripcion: '' };
 }
 
 function jobLink(j) {
@@ -136,7 +143,7 @@ function QueryFields({ q, onChange }) {
   const kinds = { fe: 'Caminos (forgeffects)', maxmin: 'MaxMin', sweep: 'Barrido' };
   return (
     <div className="controls" style={{ margin: '8px 0' }}>
-      <select value={q.kind} onChange={(e) => onChange({ kind: e.target.value, thr: q.thr ?? 0.5, descripcion: q.descripcion })} aria-label="Tipo de cálculo">
+      <select value={q.kind} onChange={(e) => onChange({ kind: e.target.value, thr: q.thr ?? 0.2, descripcion: q.descripcion })} aria-label="Tipo de cálculo">
         {Object.entries(kinds).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
       </select>
       {q.kind === 'fe' && (
@@ -184,7 +191,7 @@ function FigureEditor({ fig, job, jobs, cited, projectTipo, onChange, onCite }) 
         <label className="checkbox-label"><input type="radio" checked={!!fig.buscar} onChange={() => setSource({ buscar: job ? { ...defaultQuery(projectTipo), kind: job.kind } : defaultQuery(projectTipo) })} /> El más reciente que cumpla… (puede no existir aún)</label>
       </div>
       {fig.job_id && (
-        <select value={fig.job_id} onChange={(e) => setSource({ job_id: e.target.value })} aria-label="Cálculo" style={{ maxWidth: '100%' }}>
+        <select className="post-select" value={fig.job_id} onChange={(e) => setSource({ job_id: e.target.value })} aria-label="Cálculo">
           {!job && <option value={fig.job_id}>job {fig.job_id} (no disponible)</option>}
           {ready.map((j) => <option key={j.job_id} value={j.job_id}>{KIND_LABEL[j.kind]} · {jobDetail(j)} · job {j.job_id}</option>)}
         </select>
@@ -193,7 +200,7 @@ function FigureEditor({ fig, job, jobs, cited, projectTipo, onChange, onCite }) 
       <div className="small" style={{ marginTop: 6 }}>
         {job
           ? <>Usa: <strong>{KIND_LABEL[job.kind]}</strong> · {jobDetail(job)} <span className="muted">· job <Link to={jobLink(job)} className="mono">{job.job_id}</Link> · {fmtDate(job.created_at)}</span></>
-          : <span className="post-pending-note">{fig.buscar ? `Aún no hay un cálculo terminado que cumpla «${queryLabel(fig.buscar)}».` : 'El cálculo ya no está disponible.'} La figura se publicará «en preparación» hasta que exista y vuelvas a publicar.</span>}
+          : <span className="post-pending-note">{fig.buscar ? `Aún no hay un cálculo con resultados que cumpla «${queryLabel(fig.buscar)}».` : 'El cálculo ya no está disponible.'} Mira la vista previa para saber por qué y cómo se publicará.</span>}
       </div>
       <div className="controls" style={{ margin: '10px 0' }}>
         <select value={fig.vista} onChange={set('vista')} aria-label="Vista">
@@ -271,7 +278,11 @@ function FigurePreview({ postId, fig }) {
     <div className="post-figure-preview">
       <div className="post-side-title">Vista previa {state.loading && <span className="muted">· actualizando…</span>}</div>
       {state.error && <p className="status err small">{state.error}</p>}
-      {state.data?.pendiente && <p className="post-pending-note small">{state.data.motivo}: se verá «en preparación».</p>}
+      {state.data?.pendiente && (
+        <p className="post-pending-note small">
+          {state.data.motivo}: se verá «{state.data.estado === 'sin_resultados' ? 'sin resultados' : 'en preparación'}».
+        </p>
+      )}
       {state.data && (
         <VizErrorBoundary resetKey={body}>
           <FigureBlock b={state.data} />
@@ -340,10 +351,11 @@ function Modal({ title, onClose, children }) {
 const VIEW_LABEL = Object.fromEntries(Object.values(VIEW_OPTIONS).flat());
 
 /** Fila compacta de una figura en la barra lateral del editor. */
-function FigureItem({ fig, job, loading, cited, first, last, onEdit, onCite, onMove, onRemove }) {
+function FigureItem({ fig, job, failed, loading, cited, first, last, onEdit, onCite, onMove, onRemove }) {
   const downloads = fig.descargar_entradas || fig.descargar_resultados;
   let state;
   if (loading) state = <span className="small muted">cargando…</span>;
+  else if (!job && failed) state = <span className="badge error" title="El cálculo buscado terminó con error: repítelo o cambia los parámetros">sin resultados</span>;
   else if (cited && fig.publico && !job) state = <span className="badge pending" title="Su cálculo aún no está disponible">en preparación</span>;
   else if (!job && !fig.buscar) state = <span className="badge error">no disponible</span>;
   else if (cited && fig.publico) state = <span className="badge success">se publica</span>;
@@ -684,6 +696,7 @@ export default function PostEditor() {
                   key={f._k}
                   fig={f}
                   job={resolveJob(f, jobs)}
+                  failed={failedOnly(f, jobs)}
                   loading={!jobs}
                   cited={cited.has(f.ref)}
                   first={i === 0}

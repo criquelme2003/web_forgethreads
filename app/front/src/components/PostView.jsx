@@ -34,7 +34,7 @@ function who(meta) {
 
 /** Título automático de un gráfico a partir de su cálculo y su vista. */
 export function calcTitle(b) {
-  if (b.pendiente) return b.descripcion || 'Figura en preparación';
+  if (b.pendiente) return b.descripcion || (b.estado === 'sin_resultados' ? 'Figura sin resultados' : 'Figura en preparación');
   if (b.kind === 'fe') {
     const by = who(b.meta);
     const suffix = by ? ` · ${by}` : '';
@@ -187,7 +187,12 @@ function CalcMeta({ b }) {
 /** Gráfico de una figura (en la barra lateral o ampliada). */
 function FigureChart({ b, logY, compact }) {
   if (b.pendiente) {
-    return (
+    return b.estado === 'sin_resultados' ? (
+      <div className="post-figure-pending">
+        <strong>Sin resultados</strong>
+        <span>El cálculo de esta figura terminó sin resultados. Los autores pueden repetirlo con otros parámetros.</span>
+      </div>
+    ) : (
       <div className="post-figure-pending">
         <strong>Figura en preparación</strong>
         <span>El cálculo de esta figura aún no está disponible. Aparecerá cuando los autores actualicen la publicación.</span>

@@ -147,7 +147,26 @@ class CalcQuery(BaseModel):
 
 
 class FigureUnavailable(Exception):
-    """El cálculo de la figura no existe, no terminó o sus resultados no se pueden leer."""
+    """El cálculo de la figura no existe, no terminó o sus resultados no se pueden leer.
+
+    `sin_resultados`: el cálculo ya terminó y no dejó resultados (error o cortado): la figura se
+    publica como «sin resultados» en vez de «en preparación», porque esperar no la completa.
+    """
+
+    def __init__(self, message: str, sin_resultados: bool = False) -> None:
+        super().__init__(message)
+        self.sin_resultados = sin_resultados
+
+
+def _params_label(record: JobRecord) -> str:
+    """Parámetros principales de un cálculo, para orientar al admin cuando la búsqueda no calza."""
+    p = record.params or {}
+    if record.kind == "fe":
+        tipo = "agregado" if aggregate_inputs(record) else "por experto"
+        return f"{tipo}, THR {p.get('thr')}, orden máximo {p.get('maxorder')}"
+    if record.kind == "maxmin":
+        return f"N {p.get('numero_nodos')}, c {p.get('conectividad_promedio')}, THR {p.get('threshold')}"
+    return f"THR {p.get('thr')}"
 
 
 class Figure(BaseModel):
@@ -353,16 +372,28 @@ async def _figure_record(
     if fig.buscar is not None:
         if project_id is None:
             raise _figure_error(fig.ref, "buscar un cálculo requiere que la publicación tenga proyecto")
-        found = sorted(
-            (r for r in await store.list_by_project(project_id) if fig.buscar.matches(r)),
+        same_kind = sorted(
+            (r for r in await store.list_by_project(project_id) if r.kind == fig.buscar.kind),
             key=lambda r: r.created_at, reverse=True,
         )
+        found = [r for r in same_kind if fig.buscar.matches(r)]
         ready = [r for r in found if r.status in _publishable(r.kind)]
         if ready:
             return ready[0]
+        label = fig.buscar.label()
         if any(r.status == "pending" for r in found):
-            raise FigureUnavailable(f"el cálculo «{fig.buscar.label()}» está en curso")
-        raise FigureUnavailable(f"aún no hay un cálculo terminado que cumpla «{fig.buscar.label()}»")
+            raise FigureUnavailable(f"el cálculo «{label}» está en curso")
+        if found:  # todos terminaron sin resultados: esperar no cambia nada
+            raise FigureUnavailable(
+                f"el cálculo «{label}» (job {found[0].job_id}) terminó con estado {found[0].status}; "
+                "vuelve a lanzarlo o cambia los parámetros de la figura",
+                sin_resultados=True,
+            )
+        message = f"aún no hay un cálculo que cumpla «{label}»"
+        if same_kind:
+            others = "; ".join(dict.fromkeys(_params_label(r) for r in same_kind[:5]))
+            message += f" (hay cálculos de este tipo con otros parámetros: {others})"
+        raise FigureUnavailable(message)
     try:
         record = await store.get(fig.job_id)
     except JobNotFoundError:
@@ -493,9 +524,16 @@ class _Renderer:
             try:
                 view, record = await self.figure(fig)
             except FigureUnavailable as e:
-                self.avisos.append(f"La figura «{ref}» se publicará como «en preparación»: {e}.")
-                out_figures.append({**self.placeholder(fig), "numero": numero, "ref": ref})
+                estado = "sin resultados" if e.sin_resultados else "en preparación"
+                self.avisos.append(f"La figura «{ref}» se publicará como «{estado}»: {e}.")
+                out_figures.append({**self.placeholder(fig, e.sin_resultados), "numero": numero, "ref": ref})
                 continue
+            if _is_empty(view):
+                thr = view["meta"].get("thr")
+                self.avisos.append(
+                    f"La figura «{ref}» no tiene datos con estos parámetros{f' (THR {thr})' if thr is not None else ''}: "
+                    "el público verá un aviso; prueba con un umbral menor."
+                )
             downloads = [d for d in DOWNLOADS if getattr(fig, f"descargar_{d}")]
             out_figures.append(
                 {**view, "numero": numero, "ref": ref, "descargas": downloads, "en_cuerpo": fig.en_cuerpo}
@@ -544,13 +582,14 @@ class _Renderer:
         }
 
     @staticmethod
-    def placeholder(fig: Figure) -> dict:
-        """Figura cuyo cálculo aún no está disponible: se muestra como «en preparación»."""
+    def placeholder(fig: Figure, sin_resultados: bool = False) -> dict:
+        """Figura sin datos: «en preparación» o, si su cálculo ya terminó sin resultados, «sin resultados»."""
         return {
             "kind": fig.buscar.kind if fig.buscar else None,
             "vista": fig.vista,
             "pie": fig.pie,
             "pendiente": True,
+            "estado": "sin_resultados" if sin_resultados else "en_preparacion",
             "descripcion": fig.buscar.label() if fig.buscar else "",
             "meta": {},
             "datos": {},
@@ -561,8 +600,11 @@ class _Renderer:
     async def figure(self, fig: Figure) -> tuple[dict, JobRecord]:
         record = await _figure_record(fig, self.user, self.store, self.projects, self.post.project_id, strict=False)
         if record.status not in _publishable(record.kind):
-            estado = "en curso" if record.status == "pending" else f"en estado {record.status}"
-            raise FigureUnavailable(f"el cálculo {record.job_id} está {estado}")
+            if record.status == "pending":
+                raise FigureUnavailable(f"el cálculo {record.job_id} está en curso")
+            raise FigureUnavailable(
+                f"el cálculo {record.job_id} terminó con estado {record.status}", sin_resultados=True
+            )
         out = {"kind": record.kind, "vista": fig.vista, "pie": fig.pie, "fecha": record.created_at.isoformat()}
         try:
             if record.kind == "fe":
@@ -666,6 +708,16 @@ class _Renderer:
                 ]
             },
         }
+
+
+def _is_empty(view: dict) -> bool:
+    """La figura se armó, pero su cálculo no dejó nada que dibujar con estos parámetros."""
+    datos = view.get("datos") or {}
+    if view["kind"] == "fe":
+        return not any(t["rows"] for t in datos.get("tables", []))
+    if view["kind"] == "maxmin":
+        return not datos.get("effects_by_order")
+    return not datos.get("estadisticas")
 
 
 def _public(post: Post, view: dict, publicado_at: datetime | None, avisos: list[str] | None = None) -> PublicPost:
@@ -778,7 +830,7 @@ async def preview_figure(
     try:
         view, record = await renderer.figure(body)
     except FigureUnavailable as e:
-        return {**renderer.placeholder(body), "numero": 0, "ref": body.ref, "motivo": str(e)}
+        return {**renderer.placeholder(body, e.sin_resultados), "numero": 0, "ref": body.ref, "motivo": str(e)}
     # El job encontrado solo se muestra al admin en el editor; nunca va en lo publicado.
     return {**view, "numero": 0, "ref": body.ref, "descargas": [], "en_cuerpo": body.en_cuerpo, "job_id": record.job_id}
 
