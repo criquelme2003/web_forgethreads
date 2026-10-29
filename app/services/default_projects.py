@@ -6,9 +6,9 @@ Crea, si no existen (se reconocen por el nombre):
 - «Tesis Claudio Araya · Valdivia»: proyecto de expertos cerrado con los 10 informantes clave del
   estudio de contaminación atmosférica de Valdivia que trae forgeffects (`load_test_data`), con
   16 incentivos (a1…a16) y 4 conductas (b1…b4), los mismos nombres que usa forgeffects.
-- El barrido de la comprobación empírica de forgethreads, ya terminado (`seed_forgethreads_sweep`):
-  un job `sweep` con el CSV `sweep_n_block_merged_order.csv` de feCUDA (7 N × 19 c, 20 repeticiones,
-  THR 0,5), importado tal cual en vez de ejecutarlo en el cluster.
+- El barrido del experimento de profundidad de parada del paper de forgethreads, ya terminado
+  (`seed_forgethreads_sweep`): un job `sweep` con `sweep_n_block_merged_order.csv` de feCUDA (7 N × 19 c,
+  20 repeticiones, THR 0,5), con el orden efectivo como η₀ del paper (el CSV de feCUDA cuenta desde 0).
 - Una publicación del blog por proyecto (`seed_default_posts`), ya publicada. Sus figuras buscan los
   cálculos de `DEFAULT_CALCULATIONS`: las del barrido salen del importado y el resto se ven «en
   preparación» hasta que se ejecutan y se vuelve a publicar.
@@ -40,18 +40,17 @@ FORGETHREADS_PROJECT = "forgethreads · Aceleración CUDA"
 THESIS_PROJECT = "Tesis Claudio Araya · Valdivia"
 
 FORGETHREADS_DESCRIPTION = (
-    "Aceleración de búsqueda de efectos olvidados en grafos utilizando CUDA (Carlos Riquelme Ávila, "
-    "Universidad Católica de Temuco). forgethreads paraleliza en GPU la convolución max-min sobre las "
-    "celdas de la matriz de adyacencia y logra entre 5,7× y 17× frente a forgeffects, con un límite "
-    "práctico de 2000 nodos. Este proyecto replica la comprobación empírica: MaxMin sobre redes "
-    "aleatorias y barridos de N y c para medir el orden efectivo."
+    "«CUDA Acceleration and Empirical Stopping-Depth Regimes in Iterative Max–Min Forgotten Effects» "
+    "(Riquelme-Ávila, Rojas-Mora y Mardones-Arias, Universidad Católica de Temuco). forgethreads evalúa la "
+    "convolución max-min celda a celda en CUDA con memoria cuadrática: es entre 12,8× y 44× más rápido que "
+    "forgeffects y completa grafos densos de hasta 32 000 nodos en una RTX 4090. Incluye el experimento de "
+    "profundidad de parada: 2640 instancias Bernoulli por bloques (7 N × 19 c × 20 repeticiones, ε = 0,5)."
 )
 THESIS_DESCRIPTION = (
-    "Tesis de Claudio Araya Toro (Universidad Católica de Temuco), autor de forgeffects con Julio Rojas "
-    "Mora. Datos del estudio «Application of the Forgotten Effects Theory for Assessing the Public Policy "
-    "on Air Pollution of the Commune of Valdivia, Chile» (Manna, Rojas-Mora y Mondaca-Marino, 2018): "
-    "10 informantes clave evaluaron 16 incentivos (a1…a16) y 4 conductas (b1…b4). Son las matrices que "
-    "trae forgeffects (load_test_data); el cálculo agregado reproduce el ejemplo de su README."
+    "«Cálculo de efectos olvidados con múltiples expertos mediante procesamiento tensorial en Python», "
+    "trabajo de título de Claudio Esteban Araya Toro (Ingeniería Civil Informática, Universidad Católica de "
+    "Temuco, enero de 2025; profesor guía: Julio Rojas Mora). Desarrolla forgeffects y lo valida contra "
+    "foRgotten (R) con los datos de Valdivia: 10 expertos, 16 causas (a1…a16) y 4 efectos (b1…b4)."
 )
 
 THESIS_DATA = Path(__file__).parent / "default_data" / "valdivia.json"
@@ -130,203 +129,283 @@ async def seed_default_projects(projects: ProjectStore, owner_id: int | None = N
     return created
 
 
-# Cálculos que buscan las publicaciones: ejecutarlos y volver a publicar. Los parámetros son los
-# de los trabajos originales (THR 0,5: test2.py de feCUDA y el ejemplo del README de forgeffects).
+# Cálculos que buscan las publicaciones: ejecutarlos y volver a publicar. Los parámetros son los de
+# los trabajos originales: el paper de forgethreads (ε = 0,5) y la validación de la tesis (Cuadro 6.1).
 DEFAULT_CALCULATIONS = [
-    (FORGETHREADS_PROJECT, "MaxMin con N = 1000, c = 2,5 y THR 0,5 (el barrido ya viene importado)"),
-    (THESIS_PROJECT, "cálculo agregado de los 10 informantes con THR 0,5, orden máximo 3 y 10000 repeticiones"),
-    (THESIS_PROJECT, "cálculo por experto con THR 0,5 y orden máximo 3 (al menos un informante)"),
+    (FORGETHREADS_PROJECT, "MaxMin con N = 2500, c = 2,5, THR 0,5 y seed 2500 (el barrido ya viene importado)"),
+    (THESIS_PROJECT, "cálculo agregado de los 10 expertos con THR 0,5, orden máximo 3 y 16384 repeticiones"),
+    (THESIS_PROJECT, "cálculo por experto con THR 0,5 y orden máximo 3 (al menos un experto)"),
 ]
 
-_MAXMIN_QUERY = {"kind": "maxmin", "n": 1000, "c": 2.5, "thr": 0.5,
-                 "descripcion": "MaxMin sobre una red de 1000 nodos con c = 2,5 y THR 0,5"}
+_MAXMIN_QUERY = {"kind": "maxmin", "n": 2500, "c": 2.5, "thr": 0.5,
+                 "descripcion": "MaxMin sobre una red de 2500 nodos con c = 2,5 y THR 0,5"}
 _SWEEP_QUERY = {"kind": "sweep", "thr": 0.5, "descripcion": "Barrido de N y c con THR 0,5"}
 _AGGREGATE_QUERY = {"kind": "fe", "agregado": True, "thr": 0.5, "maxorder": 3,
-                    "descripcion": "Cálculo agregado de los informantes con THR 0,5 y orden máximo 3"}
+                    "descripcion": "Cálculo agregado de los 10 expertos con THR 0,5 y orden máximo 3"}
 _EXPERT_QUERY = {"kind": "fe", "agregado": False, "thr": 0.5, "maxorder": 3,
-                 "descripcion": "Cálculo por informante con THR 0,5 y orden máximo 3"}
+                 "descripcion": "Cálculo por experto con THR 0,5 y orden máximo 3"}
 
 DEFAULT_POSTS = [
     {
         "project": FORGETHREADS_PROJECT,
-        "titulo": "forgethreads: aceleración de la búsqueda de efectos olvidados con CUDA",
+        "titulo": "Aceleración CUDA y regímenes de profundidad de parada en efectos olvidados max-min",
         "slug": "forgethreads-aceleracion-cuda",
-        "autores": "Carlos Riquelme Ávila",
-        "palabras_clave": ["efectos olvidados", "CUDA", "GPU", "convolución max-min", "forgethreads"],
+        "autores": "Carlos Riquelme-Ávila, Julio Rojas-Mora y Elliott Mardones-Arias",
+        "palabras_clave": ["efectos olvidados", "convolución max-min", "CUDA", "profundidad de parada",
+                           "estructura aleatoria por bloques"],
         "resumen": (
-            "Los efectos olvidados son relaciones indirectas entre pares de nodos cuya intensidad supera la de "
-            "su conexión directa. Su cálculo mediante convoluciones max-min iterativas cuesta O(n³) por orden, "
-            "lo que limita la escala de las soluciones existentes. forgethreads paraleliza en GPU la convolución "
-            "max-min sobre las celdas de la matriz de adyacencia: es entre 5,7× y 17× más rápido que forgeffects "
-            "y procesa grafos de hasta 2000 nodos, frente a los 1200 de la referencia. Las figuras del barrido "
-            "muestran la comprobación empírica del orden efectivo: 7 tamaños de red, 19 conectividades y 20 "
-            "repeticiones por combinación."
+            "Calcular efectos olvidados exige convoluciones max-min repetidas sobre una matriz de influencia, "
+            "con costo aritmético cúbico por orden y, en las implementaciones que usan broadcasting de tensores, "
+            "memoria intermedia también cúbica. forgethreads es una implementación CUDA que evalúa cada "
+            "actualización max-min directamente en la celda de salida y guarda solo matrices de tamaño "
+            "cuadrático: en instancias densas es entre 12,8× y 44× más rápida que la implementación basada en "
+            "TensorFlow y amplía el mayor tamaño completado de 1200 a 32 000 nodos en una RTX 4090. El "
+            "experimento de profundidad de parada, con 2640 instancias Bernoulli por bloques, muestra un perfil "
+            "de dos ventanas que depende del tamaño: las profundidades altas aparecen cerca de dos ventanas de "
+            "grado efectivo por bloque (c ≈ 1 y c ≈ 2), con un valle entre ellas y un descenso dominado por "
+            "atajos para c grande."
         ),
         "bloques": [
             (
-                "## Introducción\n\nEn un grafo ponderado, un **efecto olvidado** es un camino indirecto entre dos "
-                "nodos cuya intensidad, medida con la convolución max-min, supera la de la arista directa. "
-                "Las soluciones existentes, [forgeffects](https://github.com/claudio-araya/forgeffects) (Python y "
-                "TensorFlow) y foRgotten (R y C++), dan resultados correctos en grafos medianos, pero forgeffects "
-                "agota la memoria de video sobre los 1240 nodos y foRgotten opera solo en CPU.\n\n"
-                "**forgethreads** es un módulo en CUDA C++ con interfaz Python (PyBind11 y DLpack) que acelera esa "
-                "búsqueda en GPU."
+                "## Introducción\n\nEl método de los efectos olvidados (Kaufmann y Gil-Aluja, 1988) estudia "
+                "influencias indirectas que no se ven en la matriz de incidencia directa. Dada una matriz de "
+                "influencia E ∈ [0, 1]^(N×N), aplica repetidamente la convolución max-min para obtener los efectos "
+                "indirectos acumulados entre pares de nodos.\n\n"
+                "El costo es alto: cada orden evalúa N² celdas con una reducción sobre N nodos intermedios, O(N³). "
+                "La entrada ocupa O(N²), pero la convolución de forgeffects (TensorFlow) materializa los valores "
+                "candidatos de todos los tríos (i, k, j), es decir O(N³) de memoria intermedia, lo que limita el "
+                "tamaño de grafo incluso en GPU de gama alta.\n\n"
+                "Este trabajo hace dos aportes conectados: una implementación CUDA con memoria de trabajo "
+                "cuadrática y un estudio empírico de **η₀**, la profundidad de parada: el último orden de "
+                "propagación en que todavía aparece un efecto significativo. η₀ fija cuántos pasos max-min hay "
+                "que ejecutar y acota el orden en que puede surgir un efecto olvidado."
             ),
             (
-                "## Metodología\n\nCada hilo CUDA calcula una celda de la convolución\n\n"
-                "`C[b,i,j] = max_k min(A[b,i,k], B[b,k,j])`\n\n"
-                "y registra un efecto olvidado cuando `C[b,i,j] − A[b,i,j] ≥ θ`. El kernel no materializa el "
-                "tensor intermedio de n × n × n que usa forgeffects, así que la memoria es O(n²) en vez de O(n³), y "
-                "el cálculo termina antes del orden máximo si un orden no descubre aristas nuevas.\n\n"
-                "Para la comprobación empírica se generan redes aleatorias de N nodos con conectividad promedio c y "
-                "se aplica MaxMin con un umbral de 0,5, registrando el **orden efectivo** (el último orden con "
-                "efectos nuevos). El barrido cubre N = 100, 250, 500, 1000, 2500, 5000 y 10000 y c entre 0,125 y "
-                "50, con 20 repeticiones por combinación (132 combinaciones, 2640 ejecuciones)."
+                "## Metodología\n\n**Propagación.** E⁽¹⁾ = E y E⁽ʳ⁺¹⁾ᵢⱼ = maxₖ min(E⁽ʳ⁾ᵢₖ, Eₖⱼ), con Eᵢᵢ = 1 "
+                "para que la iteración sea acumulativa. Los incrementos son Δ⁽ʳ⁾ = E⁽ʳ⁾ − E⁽ʳ⁻¹⁾; el par (i, j) "
+                "tiene un incremento significativo en el orden r si Δ⁽ʳ⁾ᵢⱼ > ε. Con q_r, el número de incrementos "
+                "significativos del orden r, la propagación se detiene cuando q_r = 0 y η₀ es el último orden con "
+                "q_r > 0. Con ε = 0,5 cada par puede tener a lo más un incremento significativo, así que η₀ es una "
+                "profundidad determinista.\n\n"
+                "**Kernel CUDA.** Cada bloque CUDA calcula una celda (i, j): sus hilos recorren subconjuntos del "
+                "índice intermedio k cargados en memoria compartida, reducen min(E⁽ʳ⁾ᵢₖ, Eₖⱼ), guardan el argmax "
+                "para reconstruir caminos y suman atómicamente q_r si el incremento supera ε. Solo se guardan E, "
+                "E⁽ʳ⁾, E⁽ʳ⁺¹⁾, el argmax y el contador: memoria O(N²). La interfaz Python usa PyBind11 y DLPack.\n\n"
+                "**Diseño Bernoulli por bloques.** Los nodos se dividen en bloques N y M (α = 0,5) con estructura "
+                "unidireccional: N → N, N → M y M → M, sin retorno de M a N. Las entradas fuera de la diagonal son "
+                "binarias y se sortean con p_N = c/(n − 1) y p_M = c/(n_M − 1), de modo que c es el grado de "
+                "salida esperado de cada fila. En el diseño balanceado d_MM = c y d_NN ≈ c/2: los grados efectivos "
+                "cruzan 1 cerca de c = 1 (bloque M) y de c = 2 (bloque N). El barrido usa "
+                "n ∈ {100, 250, 500, 1000, 2500, 5000, 10000} y c ∈ {1/8, 1/4, 1/2, 1, 9/8, 5/4, 3/2, 7/4, 2, 9/4, "
+                "5/2, 11/4, 3, 4, 6, 8, 10, 25, 50}, con 20 repeticiones por celda: 132 celdas admisibles (se "
+                "excluye (100, 50), donde p_M > 1) y 2640 observaciones."
             ),
             (
-                "## Resultados\n\nEn una RTX 4090 (θ = 0,3, hasta orden 4, media de 10 ejecuciones):\n\n"
-                "| Nodos | forgeffects (ms) | forgethreads (ms) | Aceleración |\n|---:|---:|---:|---:|\n"
-                "| 200 | 10,2 | 0,6 | 17,0× |\n| 400 | 29,1 | 3,5 | 8,3× |\n| 600 | 81,6 | 11,1 | 7,4× |\n"
-                "| 800 | 181,1 | 25,7 | 7,0× |\n| 1000 | 345,0 | 55,5 | 6,2× |\n| 1200 | 594,2 | 103,8 | 5,7× |\n"
-                "| 1600 | — | 236,8 | — |\n| 2000 | — | 442,3 | — |\n\n"
-                "«—»: forgeffects no termina por falta de memoria de video.\n\n"
-                "La {{fig:m1}} muestra los efectos encontrados en cada orden para una red de 1000 nodos. "
-                "La {{fig:s1}} resume el barrido: el orden efectivo medio según c, para cada N, y la "
-                "{{fig:s2}} lo muestra según N, para cada c."
+                "## Resultados\n\n**Tiempo de ejecución** (RTX 4090, ms, media de 10 ejecuciones tras un "
+                "calentamiento; caminos sin armar en ambas implementaciones):\n\n"
+                "| Nodos | forgethreads | forgeffects | Aceleración |\n|--:|--:|--:|--:|\n"
+                "| 150 | 0,183 | 8,050 | 44,02× |\n| 300 | 0,226 | 8,885 | 39,31× |\n"
+                "| 600 | 0,753 | 15,578 | 20,67× |\n| 700 | 1,019 | 19,778 | 19,40× |\n"
+                "| 900 | 1,874 | 40,612 | 21,68× |\n| 1200 | 4,465 | 57,175 | 12,80× |\n\n"
+                "**Memoria.** forgeffects completa 1200 nodos y se queda sin memoria desde 1300; forgethreads "
+                "completa todos los tamaños probados, de 1300 a 32 000 nodos.\n\n"
+                "**Profundidad de parada por régimen** (media, cuantil 0,95 y máximo sobre todas las "
+                "observaciones):\n\n"
+                "| Régimen | Intervalo | Celdas | Media (Q.95) | Máx. |\n|---|---|--:|--:|--:|\n"
+                "| Baja conectividad | c < 1 | 21 | 4,97 (10,0) | 13 |\n"
+                "| Ventana del bloque M | 1 ≤ c ≤ 5/4 | 21 | 34,87 (79,0) | 101 |\n"
+                "| Interumbral | 5/4 < c < 2 | 14 | 28,99 (49,0) | 57 |\n"
+                "| Ventana del bloque N | 2 ≤ c ≤ 3 | 35 | 33,64 (70,0) | 102 |\n"
+                "| Dominado por atajos | c > 3 | 41 | 10,38 (25,0) | 34 |\n\n"
+                "La separación entre las ventanas y el valle depende del tamaño: con n ≤ 500 los contrastes "
+                "ventana − valle son negativos o no concluyentes, cerca de n = 1000 se acercan a cero y desde "
+                "n = 2500 ambos intervalos bootstrap son positivos; en n = 10 000 llegan a 23,9 (ventana M) y 15,4 "
+                "(ventana N).\n\n"
+                "La {{fig:s1}} muestra el orden efectivo medio según c para cada N, como la figura 1 del paper, y "
+                "la {{fig:s2}} lo muestra según N para cada c. La {{fig:m1}} muestra q_r, los efectos encontrados "
+                "en cada orden, para una instancia de 2500 nodos con c = 5/2, en la ventana del bloque N."
             ),
             (
-                "## Discusión\n\nEl orden efectivo es bajo con conectividad baja (c < 1), sube con fuerza en la "
-                "ventana 1 ≤ c ≤ 3 y vuelve a bajar cuando dominan los atajos (c > 3). El máximo crece con N: "
-                "de unos 12 órdenes con 100 nodos a cerca de 80 con 10000."
+                "## Discusión\n\nAumentar c no hace simplemente más profunda la propagación. Dentro del diseño "
+                "muestreado, las profundidades altas aparecen cerca de las dos ventanas de grado efectivo por "
+                "bloque, separadas por un valle interumbral y seguidas de un descenso dominado por atajos. El perfil "
+                "se explica mejor por los grados efectivos de cada bloque que por la conectividad global.\n\n"
+                "Los conteos q_r muestran que η₀ es una propiedad del borde derecho de la distribución de "
+                "descubrimientos: en n = 2500 el total de descubrimientos sigue creciendo de c = 2 a c = 3, pero la "
+                "profundidad media cae de 49,00 en c = 5/2 a 36,95 en c = 3, porque la conectividad adicional "
+                "adelanta los descubrimientos a órdenes más tempranos.\n\n"
+                "El diseño binario es un diseño de control para el criterio de parada: separa la propagación del "
+                "soporte de la variabilidad de los pesos. En matrices difusas con pesos, los cruces de umbral "
+                "dependen también de la distribución de los pesos."
             ),
             (
-                "## Conclusiones\n\n- forgethreads es entre 5,7× y 17× más rápido que forgeffects entre 200 y 1200 "
-                "nodos.\n- Bajar la memoria de O(n³) a O(n²) permite llegar a 2000 nodos.\n"
-                "- Trabajo futuro: varias GPU, grafos dinámicos, comparación con foRgotten y grafos dispersos (CSR)."
+                "## Conclusiones\n\n- forgethreads evita los tensores intermedios cúbicos con propagación max-min "
+                "en la celda de salida: en la RTX 4090 obtuvo aceleraciones de 12,8× a 44× frente a la referencia "
+                "TensorFlow en media precisión y completó instancias densas de hasta 32 000 nodos.\n"
+                "- En 2640 instancias Bernoulli por bloques, las profundidades de parada altas aparecen cerca de "
+                "dos ventanas de grado efectivo, separadas por un valle interumbral y seguidas de un descenso "
+                "dominado por atajos; el perfil es consistente con una organización por grados efectivos de bloque "
+                "y no solo por la conectividad global.\n"
+                "- Un mayor número de descubrimientos no implica una mayor profundidad de parada cuando los "
+                "descubrimientos se desplazan a órdenes más tempranos.\n"
+                "- Trabajo futuro: describir la profundidad de parada por regímenes de grado efectivo, probar "
+                "bloques no balanceados y tamaños mayores, registrar profundidades por clase de par y desarrollar "
+                "kernels para grafos dispersos (listas de adyacencia o CSR)."
             ),
             (
-                "## Referencias\n\n- Kaufmann, A. y Gil Aluja, J. (1988). _Modelos para la investigación de efectos "
-                "olvidados_. Milladoiro.\n- Araya Toro, C. y Rojas Mora, J. (2024). _forgeffects: A Python Package for "
-                "Analyzing Forgotten and Direct Effects_. Universidad Católica de Temuco.\n"
-                "- Mardones-Arias, E. y Rojas-Mora, J. (2022). _foRgotten_. Paquete de R, versión 1.1.0."
+                "## Referencias\n\n- Kaufmann, A. y Gil-Aluja, J. (1988). _Models for the Research of Forgotten "
+                "Effects_. Milladoiro.\n- Chávez-Bustamante, F., Mardones-Arias, E., Rojas-Mora, J. y Tijmes-Ihl, J. "
+                "(2023). A forgotten effects approach to the analysis of complex economic systems: Identifying "
+                "indirect effects on trade networks. _Mathematics_, 11(3), 531.\n"
+                "- Li, N., Yu, X. y Liu, W. (2025). Max–min transitive closure of randomly generated fuzzy matrix: "
+                "Bernoulli and classical probabilistic models. _Axioms_, 14(9), 690.\n"
+                "- Araya-Toro, C. y Rojas-Mora, J. (2024). _forgeffects: A Python package for analyzing forgotten "
+                "and direct effects_, versión 0.2.x.\n"
+                "- Riquelme Ávila, C. (2026). _feCUDA: Finding extremal CUDA paths_. "
+                "https://github.com/criquelme2003/feCUDA"
             ),
         ],
         "figuras": [
+            {"ref": "s1", "buscar": _SWEEP_QUERY, "vista": "por_n", "publico": True, "descargar_resultados": True,
+             "pie": "Orden efectivo medio según c, para cada N, con su error estándar."},
+            {"ref": "s2", "buscar": _SWEEP_QUERY, "vista": "por_c", "publico": True,
+             "pie": "Orden efectivo según N, para cada c; la banda va del mínimo al máximo observado."},
             {"ref": "m1", "buscar": _MAXMIN_QUERY, "vista": "efectos", "escala": "log", "publico": True,
              "en_cuerpo": True, "descargar_entradas": True, "descargar_resultados": True,
-             "pie": "Efectos encontrados por orden (escala logarítmica)."},
-            {"ref": "s1", "buscar": _SWEEP_QUERY, "vista": "por_n", "publico": True, "descargar_resultados": True,
-             "pie": "Media del orden efectivo con su error estándar."},
-            {"ref": "s2", "buscar": _SWEEP_QUERY, "vista": "por_c", "publico": True,
-             "pie": "La banda va del mínimo al máximo observado."},
+             "pie": "Efectos encontrados por orden (q_r) en una instancia con n = 2500 y c = 5/2 (escala logarítmica)."},
         ],
     },
     {
         "project": THESIS_PROJECT,
-        "titulo": "Efectos olvidados en la política de contaminación atmosférica de Valdivia",
+        "titulo": "Cálculo de efectos olvidados con múltiples expertos mediante procesamiento tensorial en Python",
         "slug": "tesis-claudio-araya-valdivia",
-        "autores": "Claudio Araya Toro",
-        "palabras_clave": ["efectos olvidados", "forgeffects", "contaminación atmosférica", "Valdivia",
-                           "informantes clave"],
+        "autores": "Claudio Esteban Araya Toro",
+        "palabras_clave": ["teoría de los efectos olvidados", "procesamiento tensorial", "efectos directos",
+                           "Python", "forgeffects"],
         "resumen": (
-            "La política de descontaminación de Valdivia usa incentivos para cambiar la conducta de los hogares, "
-            "pero la contaminación por uso de leña siguió aumentando: un problema complejo y con incertidumbre en "
-            "el que muchas influencias son indirectas. Diez informantes clave evaluaron cómo 16 incentivos inciden "
-            "entre sí y sobre 4 conductas, y con forgeffects se agregaron sus evaluaciones en tensores para buscar "
-            "los efectos olvidados mediante remuestreo empírico. El estudio concluye que el subsidio al transporte "
-            "no reduce la contaminación residencial, que mejorar la aislación térmica de las viviendas la reduce "
-            "más que mejorar la calidad de la leña, y que la educación y la investigación y desarrollo son claves "
-            "para el cambio de conducta y la eficiencia energética."
+            "Este trabajo aborda la optimización del cálculo de la teoría de los efectos olvidados mediante el "
+            "desarrollo de un paquete denominado forgeffects para Python, el cual se basa principalmente en "
+            "procesamiento tensorial. El enfoque propuesto busca superar las limitaciones de las herramientas "
+            "existentes, mejorando tanto la eficiencia como la velocidad de los cálculos, con especial énfasis en "
+            "la integración de múltiples expertos para modelar relaciones de causa y efecto. Además, el paquete "
+            "incorpora la capacidad de calcular efectos directos como una extensión del análisis. La solución "
+            "utiliza tensores para realizar operaciones con cada experto, lo que permite agilizar "
+            "significativamente los procesos computacionales. Para validar la efectividad del enfoque, se "
+            "realizaron comparativas de rendimiento con su implementación anterior en el entorno de desarrollo R, "
+            "evidenciando mejoras significativas en términos de escalabilidad y reproducibilidad."
         ),
         "bloques": [
             (
-                "## Introducción\n\nValdivia enfrenta altos niveles de contaminación atmosférica en invierno, "
-                "originados sobre todo en el uso residencial de leña para calefacción. La política pública aplicada "
-                "se apoya en **incentivos** para que los hogares cambien su conducta; aun así, la contaminación "
-                "siguió aumentando. Es un problema de política ambiental complejo, con incertidumbre y con "
-                "relaciones que no son directas: un incentivo puede actuar a través de otros incentivos o conductas "
-                "antes de llegar al efecto buscado.\n\n"
-                "La teoría de los efectos olvidados (Kaufmann y Gil Aluja, 1988) está pensada para ese tipo de "
-                "relaciones: busca las incidencias indirectas que se pasan por alto al planificar. Este trabajo la "
-                "aplica a los datos del estudio de Manna, Rojas-Mora y Mondaca-Marino (2018) con "
-                "[forgeffects](https://github.com/claudio-araya/forgeffects), un paquete de Python que agrega las "
-                "evaluaciones de varios informantes clave en tensores 3D y aprovecha la GPU si está disponible."
+                "## Introducción\n\nLa teoría de los efectos olvidados (Kaufmann y Gil Aluja, 1988) identifica "
+                "impactos indirectos en sistemas complejos, donde las relaciones de causa y efecto no son "
+                "inmediatamente evidentes. Uno de sus principales desafíos es medir y agregar la incidencia, una "
+                "noción subjetiva que se complica cuando la evalúan varios expertos, cada uno con su perspectiva, "
+                "experiencia e incertidumbre.\n\n"
+                "El paquete de R foRgotten (Mardones-Arias y Rojas-Mora, 2022) modela cada relación como un vector "
+                "de incidencias de varios expertos, pero resulta insuficiente para grandes volúmenes de datos por "
+                "su velocidad y capacidad de cómputo, en especial en los efectos olvidados con remuestreo "
+                "empírico.\n\n"
+                "El objetivo de este trabajo es implementar una solución para el cálculo de efectos olvidados con "
+                "múltiples expertos mediante procesamiento tensorial en Python: diagnosticar las limitaciones de "
+                "foRgotten, diseñar e implementar "
+                "[forgeffects](https://github.com/claudio-araya/forgeffects) con TensorFlow y validar que reproduce "
+                "sus resultados."
             ),
             (
-                "## Metodología\n\nDiez informantes clave completaron tres matrices de incidencia con valores "
-                "de 0 a 1:\n\n"
-                "| Matriz | Relaciona | Tamaño |\n|---|---|---|\n| CC | incentivos con incentivos | 16 × 16 |\n"
-                "| CE | incentivos con conductas | 16 × 4 |\n| EE | conductas con conductas | 4 × 4 |\n\n"
-                "Los incentivos se nombran a1…a16 y las conductas b1…b4. Las matrices de los informantes se apilan "
-                "en tensores (informantes × filas × columnas) que forman un **grafo bipartito encadenado**: "
-                "incentivos → incentivos → conductas → conductas.\n\n"
-                "La función `FE()` de forgeffects aplica convoluciones max-min iterativas sobre ese grafo. Con "
-                "**remuestreo empírico** genera 10 000 réplicas: en cada una, el valor de cada celda se toma de un "
-                "percentil al azar de lo que respondieron los informantes en esa celda. Sobre las réplicas registra, "
-                "para cada camino indirecto, en cuántas aparece (`Count`), su incidencia media (`Mean`) y su "
-                "desviación estándar (`SD`). Un camino es un efecto olvidado si su incidencia supera el grado de verdad "
-                "**THR = 0,5** y la de la relación directa; se exploran caminos de hasta **3 pasos** (órdenes 2 y "
-                "3). La función `directEffects()` complementa el análisis con las incidencias directas medias, sus "
-                "intervalos de confianza y una prueba t unilateral con bootstrap."
+                "## Metodología\n\n**Datos.** Matrices de incidencia de 10 expertos del estudio de Manna, "
+                "Rojas-Mora y Colther (2018) sobre la política de contaminación atmosférica de Valdivia, que el "
+                "paquete incluye:\n\n"
+                "| Matriz | Relaciona | Tamaño |\n|---|---|---|\n| CC | causa con causa | 10 × 16 × 16 |\n"
+                "| CE | causa con efecto | 10 × 16 × 4 |\n| EE | efecto con efecto | 10 × 4 × 4 |\n\n"
+                "**Efectos olvidados, `FE()`.** Las matrices se apilan como tensores (expertos × filas × columnas) "
+                "y forman un grafo bipartito encadenado. El remuestreo empírico genera `rep` réplicas en que cada "
+                "celda toma un percentil al azar de las respuestas de los expertos; sobre ellas se aplican "
+                "convoluciones max-min iterativas y se arman los caminos, con su frecuencia (`Count`), media "
+                "(`Mean`) y desviación estándar (`SD`).\n\n"
+                "**Efectos directos, `directEffects()`.** Centra los datos en la media, genera réplicas bootstrap "
+                "y calcula un estadístico t unilateral que compara la incidencia media con el umbral, junto con su "
+                "intervalo de confianza y valor p.\n\n"
+                "**Pruebas.** Con THR = 0,5 y orden máximo 3, se midió el tiempo promedio de tres ejecuciones de "
+                "`FE()` en foRgotten y en forgeffects (CPU y GPU) con 2¹⁰, 2¹¹, 2¹², 2¹³ y 2¹⁴ repeticiones, en un "
+                "AMD Ryzen 7 5700X con 16 GB de RAM y una NVIDIA GeForce RTX 3060 Ti de 8 GB (Ubuntu 22.04.5). Para "
+                "validar, se compararon las frecuencias de los diez caminos más frecuentes de orden 2 y 3 con "
+                "2¹⁴ = 16 384 repeticiones, y los valores p de los efectos directos entre efectos (EE, 10 000 "
+                "repeticiones, 95 % de confianza), con la prueba de Shapiro-Wilk, una prueba t pareada y el "
+                "tamaño del efecto (d de Cohen)."
             ),
             (
-                "## Resultados\n\nCon estos parámetros, la documentación de forgeffects reporta **3725 efectos "
-                "olvidados de orden 2**. Los que más se repiten entre las réplicas son:\n\n"
-                "| Desde | A través de | Hasta | Count | Mean | SD |\n|:-:|:-:|:-:|--:|--:|--:|\n"
-                "| a10 | a11 | a14 | 2134 | 0,660 | 0,088 |\n| a13 | a16 | a1 | 2038 | 0,639 | 0,080 |\n"
-                "| a3 | a6 | a9 | 1910 | 0,642 | 0,081 |\n| a8 | a13 | a10 | 1905 | 0,714 | 0,101 |\n"
-                "| a13 | a6 | a9 | 1698 | 0,662 | 0,083 |\n\n"
-                "El análisis de efectos directos entrega 316 relaciones directas (entre incentivos, de incentivos a "
-                "conductas y entre conductas) con su media, intervalo de confianza y valor p.\n\n"
-                "La {{fig:f1}} muestra los efectos olvidados de orden 2 más fuertes del cálculo agregado: cada "
-                "franja parte en un incentivo, pasa por un intermediario y llega a otro incentivo o a una conducta. "
-                "Haz clic en un origen para ver solo sus caminos. La {{fig:f2}} reúne todos los órdenes en un hive "
-                "plot, y la {{fig:f3}} muestra los caminos de un solo informante, para comparar con el resultado "
-                "agregado."
+                "## Resultados\n\n**Rendimiento de `FE()`** (segundos, promedio de tres ejecuciones):\n\n"
+                "| Repeticiones | foRgotten | forgeffects CPU | forgeffects GPU |\n|--:|--:|--:|--:|\n"
+                "| 1024 | 53,378 | 0,245 | 0,238 |\n| 2048 | 153,167 | 0,374 | 0,355 |\n"
+                "| 4096 | 442,315 | 0,524 | 0,474 |\n| 8192 | 1403,2 | 0,982 | 0,806 |\n"
+                "| 16 384 | 4865,967 | 1,994 | 1,506 |\n\n"
+                "Una ley de potencia describe mejor los tres casos: foRgotten crece con exponente 1,811, cercano a "
+                "cuadrático, mientras forgeffects lo hace con 1,196 en CPU y 1,085 en GPU, cerca de lineal.\n\n"
+                "**Validación de efectos olvidados** (frecuencias con 16 384 repeticiones):\n\n"
+                "| Camino de orden 2 | foRgotten | forgeffects |\n|---|--:|--:|\n"
+                "| a10 → a11 → a14 | 3559 | 3525 |\n| a13 → a16 → a1 | 3276 | 3273 |\n"
+                "| a3 → a6 → a9 | 3107 | 3123 |\n| a8 → a13 → a10 | 3096 | 3069 |\n"
+                "| a14 → a11 → a4 | 2746 | 2781 |\n| a13 → a6 → a9 | 2734 | 2739 |\n"
+                "| a9 → a8 → a13 | 2714 | 2637 |\n| a7 → a6 → a9 | 2616 | 2569 |\n"
+                "| a15 → a11 → a3 | 2592 | 2561 |\n| a8 → a6 → a9 | 2591 | 2619 |\n\n"
+                "En orden 2 las diferencias normalizadas son normales (Shapiro-Wilk W = 0,960, p = 0,787) y la "
+                "prueba t pareada no encuentra diferencias (p = 1; d de Cohen ≈ 3,4 × 10⁻¹⁵). En orden 3, cuyo "
+                "camino más frecuente es b3 → b2 → b4 → b1 (21 y 22 apariciones), el resultado es el mismo "
+                "(W = 0,989, p = 0,996; t pareada p = 1). En los efectos directos, los valores p de las 12 "
+                "relaciones entre efectos tampoco difieren (W = 0,902, p = 0,166; t pareada p = 1; "
+                "d ≈ 1,2 × 10⁻¹⁴); por ejemplo, b1 → b2 da 0,925 en foRgotten y 0,934 en forgeffects.\n\n"
+                "La {{fig:f1}} muestra los caminos de orden 2 del cálculo agregado de los 10 expertos, para "
+                "comparar con la tabla; la {{fig:f2}} reúne los órdenes 2 y 3 en un hive plot, y la {{fig:f3}} "
+                "muestra los caminos de un solo experto."
             ),
             (
-                "## Discusión\n\nLos caminos más frecuentes son **incentivo → incentivo → incentivo**: buena parte "
-                "del efecto de la política no llega directo a las conductas, sino a través de otros incentivos que "
-                "lo refuerzan. Por eso evaluar cada incentivo por separado subestima su alcance, y quitar uno puede "
-                "debilitar a otros que dependen de él.\n\n"
-                "El remuestreo sobre la distribución de las respuestas permite distinguir los caminos que aparecen "
-                "en muchas réplicas (`Count` alto), respaldados por el conjunto de informantes, de los que dependen de "
-                "respuestas extremas, y la desviación estándar muestra cuánto varía su intensidad. Comparar el cálculo agregado con el de un informante ({{fig:f3}}) muestra "
-                "cuánto cambia el diagnóstico si se consulta a una sola persona."
+                "## Discusión\n\nEl crecimiento casi cuadrático de foRgotten hace prohibitivos los análisis con "
+                "muchas repeticiones empíricas: 2¹⁴ repeticiones tardan más de 80 minutos. forgeffects, con "
+                "crecimiento casi lineal, las resuelve en menos de 2 segundos, aunque la diferencia entre CPU y GPU "
+                "es pequeña.\n\n"
+                "La validación muestra que ambos paquetes producen resultados coherentes y comparables, pero vale "
+                "solo para los casos y parámetros evaluados y no debe generalizarse a todas las configuraciones.\n\n"
+                "Se identificaron limitaciones de TensorFlow en GPU: reserva por defecto toda la memoria disponible "
+                "y, en el armado de caminos, las iteraciones y comparaciones generan overhead y fragmentación de "
+                "memoria, incluso con `memory_growth=True`."
             ),
             (
-                "## Conclusiones\n\n"
-                "- El **subsidio al transporte** no tiene efecto en la reducción de la contaminación residencial.\n"
-                "- Mejorar la **aislación térmica** de las viviendas puede reducir la contaminación más que mejorar "
-                "la **calidad de la leña**.\n"
-                "- La **educación** y la **investigación y desarrollo** pueden cumplir un papel importante para "
-                "promover el cambio de conducta y mejorar la eficiencia energética.\n"
-                "- Los efectos olvidados muestran que los incentivos actúan sobre todo a través de otros incentivos: "
-                "la política debe diseñarse como un conjunto y no como medidas aisladas.\n"
-                "- forgeffects lleva este análisis a Python con tensores: agrega a varios informantes, entrega la "
-                "frecuencia, la media y la desviación de cada camino y puede usar la GPU."
+                "## Conclusiones\n\n- forgeffects, implementado en Python, reproduce de manera consistente los "
+                "resultados de foRgotten en R en los casos evaluados, tanto en los efectos olvidados como en los "
+                "efectos directos.\n"
+                "- Su rendimiento subcuadrático y su implementación en un entorno ampliamente utilizado como Python "
+                "lo hacen una herramienta robusta y escalable, y un marco sólido para aplicaciones que requieren "
+                "flexibilidad, eficiencia computacional y reproducibilidad.\n"
+                "- Al estar bajo licencia MIT, se espera que la comunidad pueda mejorarlo o reimplementarlo.\n"
+                "- Trabajo futuro: optimizar el algoritmo con CUDA, para controlar mejor la memoria de la GPU, y "
+                "llevarlo a una plataforma web donde los expertos ingresen las matrices de forma colaborativa, el "
+                "cálculo se delegue a una API y los resultados se exploren gráficamente."
             ),
             (
                 "## Referencias\n\n- Kaufmann, A. y Gil Aluja, J. (1988). _Modelos para la investigación de efectos "
-                "olvidados_. Milladoiro.\n- Manna, E. M., Rojas-Mora, J. y Mondaca-Marino, C. (2018). Application of "
-                "the Forgotten Effects Theory for Assessing the Public Policy on Air Pollution of the Commune of "
-                "Valdivia, Chile. En _From Science to Society_ (pp. 61-72). Springer.\n"
-                "- Araya Toro, C. y Rojas Mora, J. (2024). _forgeffects: A Python Package for Analyzing Forgotten "
-                "and Direct Effects_. Universidad Católica de Temuco."
+                "olvidados_. Milladoiro.\n- Mardones-Arias, E. y Rojas-Mora, J. (2022). _foRgotten_ (paquete de R, "
+                "versión 1.1.0). https://github.com/ElliottMardones/foRgotten\n"
+                "- Manna, E. M., Rojas-Mora, J. y Colther, C. (2018). Application of the Forgotten Effects Theory "
+                "for Assessing the Public Policy on Air Pollution of the Commune of Valdivia, Chile. "
+                "https://doi.org/10.1007/978-3-319-65687-8_6\n"
+                "- Chávez-Bustamante, F., Mardones-Arias, E., Rojas-Mora, J. y Tijmes-Ihl, J. (2023). A Forgotten "
+                "Effects Approach to the Analysis of Complex Economic Systems: Identifying Indirect Effects on Trade "
+                "Networks. _Mathematics_, 11(3).\n"
+                "- Abadi, M. et al. (2015). _TensorFlow: Large-Scale Machine Learning on Heterogeneous Distributed "
+                "Systems_."
             ),
         ],
         "figuras": [
             {"ref": "f1", "buscar": _AGGREGATE_QUERY, "vista": "sankey", "orden": 2, "top": 50, "publico": True,
              "en_cuerpo": True, "descargar_entradas": True, "descargar_resultados": True,
-             "pie": "Efectos olvidados de orden 2 con mayor incidencia media (10 informantes)."},
+             "pie": "Efectos olvidados de orden 2 del cálculo agregado de los 10 expertos."},
             {"ref": "f2", "buscar": _AGGREGATE_QUERY, "vista": "hive", "top": 50, "publico": True,
-             "pie": "Todos los órdenes; el color indica el orden y el grosor la incidencia."},
+             "pie": "Órdenes 2 y 3; el color indica el orden y el grosor la incidencia."},
             {"ref": "f3", "buscar": _EXPERT_QUERY, "vista": "sankey", "orden": 2, "top": 50, "publico": True,
-             "pie": "Caminos de orden 2 de un informante (el cálculo por informante más reciente)."},
+             "pie": "Caminos de orden 2 de un experto (el cálculo por experto más reciente)."},
         ],
     },
 ]
-
 
 async def seed_default_posts(
     projects: ProjectStore,
@@ -354,13 +433,13 @@ async def seed_forgethreads_sweep(
     """Registra el barrido de feCUDA como un job `sweep` terminado del proyecto de forgethreads.
 
     Deja su CSV crudo en `sweep_results_dir`, donde la app lo busca antes de ir al nodo; si el
-    archivo falta (por ejemplo, otro volumen), lo vuelve a copiar. Devuelve True si creó el job.
+    archivo falta (por ejemplo, otro volumen) o cambió en el repo, lo vuelve a copiar. Devuelve True si creó el job.
     """
     project = next((p for p in await projects.list_projects() if p.nombre == FORGETHREADS_PROJECT), None)
     if project is None:
         return False
     local = Path(settings.sweep_results_dir) / f"{SWEEP_JOB_ID}.csv"
-    if not local.is_file():
+    if not local.is_file() or local.read_bytes() != SWEEP_DATA.read_bytes():
         local.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(SWEEP_DATA, local)
     try:

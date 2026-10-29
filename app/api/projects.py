@@ -53,7 +53,7 @@ MAX_NAME = 200
 MAX_DESCRIPTION = 5000
 MAX_LABEL_CHARS = 100
 # Cota de seguridad del bootstrap mientras no se definan los límites de cálculo (P-03).
-MAX_REPS = 10_000
+MAX_REPS = 16_384  # 2¹⁴: las repeticiones con que la tesis de forgeffects valida FE() contra foRgotten
 MIN_AGGREGATE_INPUTS = 2
 
 
