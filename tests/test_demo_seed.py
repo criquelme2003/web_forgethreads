@@ -66,26 +66,3 @@ def test_seed_publishes_demo_posts_waiting_for_calculations(database: str, tmp_p
     expert = asyncio.run(posts.get_published("demo-efectos-olvidados"))
     assert [f["ref"] for f in expert.publicado["figuras"]] == ["f1", "f2"]  # f3 no se cita
 
-
-def test_seed_updates_demo_posts_still_on_old_threshold(database: str, tmp_path) -> None:
-    """Las publicaciones de muestra que siguen buscando THR 0,5 pasan a THR 0,2 (y se republican)."""
-    projects, posts = ProjectStore(database), PostStore(database)
-    owner = asyncio.run(UserStore(database).ensure_superadmin("admin@example.com", "clave-larga-123"))
-    settings = Settings(
-        auth_username="admin@example.com", auth_password="clave-larga-123",
-        session_secret_key="test-secret-key-0123456789", fe_results_dir=str(tmp_path / "fe"),
-    )
-    asyncio.run(seed_demo(projects, owner.id))
-    jobs = JobStore(database)
-    asyncio.run(seed_demo_posts(projects, posts, jobs, owner, settings))
-    post = asyncio.run(posts.get_published("demo-orden-efectivo"))
-    old = [
-        {**f, "buscar": {**f["buscar"], "thr": 0.5, "descripcion": f["buscar"]["descripcion"].replace("0,2", "0,5")}}
-        for f in post.figuras
-    ]
-    asyncio.run(posts.update(post.id, figuras=old))
-
-    assert asyncio.run(seed_demo_posts(projects, posts, jobs, owner, settings)) == ["demo-orden-efectivo"]
-    post = asyncio.run(posts.get_published("demo-orden-efectivo"))
-    assert {f["buscar"]["thr"] for f in post.figuras} == {0.2}
-    assert not post.cambios_sin_publicar

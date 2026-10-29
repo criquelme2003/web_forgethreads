@@ -197,18 +197,6 @@ DEMO_POSTS = [
 ]
 
 
-# Las primeras publicaciones de muestra buscaban cálculos con THR 0,5, que dejaban las figuras
-# sin resultados; si siguen con esa búsqueda (nadie la cambió), se actualizan a THR 0,2.
-_OUTDATED_THR = 0.5
-
-
-def _outdated_demo(post) -> bool:
-    return any(
-        (f.get("buscar") or {}).get("thr") == _OUTDATED_THR and "THR 0,5" in (f.get("buscar") or {}).get("descripcion", "")
-        for f in post.figuras
-    )
-
-
 async def seed_demo_posts(
     projects: ProjectStore,
     posts: PostStore,
@@ -216,24 +204,24 @@ async def seed_demo_posts(
     owner: User,
     settings: Settings,
     pool=None,
+    specs: list[dict] | None = None,
 ) -> list[str]:
-    """Crea y publica las publicaciones de muestra que falten (o que sigan con la búsqueda antigua).
+    """Crea y publica las publicaciones de muestra que falten.
 
-    Devuelve sus direcciones.
+    `specs` reemplaza a DEMO_POSTS (lo usan los proyectos por defecto). Devuelve sus direcciones.
     """
     from fastapi import HTTPException
 
     from app.api.posts import Figure, PostUpdate, _Renderer
 
     by_name = {p.nombre: p for p in await projects.list_projects()}
-    existing = {p.slug: p for p in await posts.list_all()}
+    existing = {p.slug for p in await posts.list_all()}
     created: list[str] = []
-    for spec in DEMO_POSTS:
+    for spec in DEMO_POSTS if specs is None else specs:
         project = by_name.get(spec["project"])
         if project is None:
             continue
-        current = existing.get(spec["slug"])
-        if current is not None and not _outdated_demo(current):
+        if spec["slug"] in existing:
             continue
         body = PostUpdate(
             slug=spec["slug"], resumen=spec["resumen"], autores=spec["autores"],
@@ -241,7 +229,7 @@ async def seed_demo_posts(
             bloques=[{"tipo": "texto", "markdown": md} for md in spec["bloques"]],
             figuras=spec["figuras"],
         )
-        post = current or await posts.create(
+        post = await posts.create(
             titulo=spec["titulo"], resumen="", project_id=project.id, autor_id=owner.id, bloques=[],
         )
         post = await posts.update(
@@ -257,7 +245,7 @@ async def seed_demo_posts(
             logger.warning("No se pudo publicar %s: %s", spec["slug"], e.detail)
         created.append(spec["slug"])
     if created:
-        logger.info("Publicaciones de muestra creadas o actualizadas: %s", ", ".join(created))
+        logger.info("Publicaciones creadas: %s", ", ".join(created))
     return created
 
 

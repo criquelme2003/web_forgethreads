@@ -6,6 +6,8 @@ import tempfile
 # una base temporal antes de que se lea, para no tocar data/jobs.db.
 os.environ["JOBS_DB_PATH"] = os.path.join(tempfile.mkdtemp(prefix="wf-tests-"), "jobs.db")
 os.environ.pop("DATABASE_URL", None)
+# Los proyectos por defecto se prueban en tests/test_default_projects.py, no en cada arranque.
+os.environ["SEED_DEFAULT_PROJECTS"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient
