@@ -116,12 +116,12 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
       value: `${own.length} camino${own.length === 1 ? '' : 's'}`,
       title: n.label,
       detail: AXIS[n.axis].title,
-      lines: n.axis === 'origin' ? [origin === n.label ? 'Clic para quitar el filtro' : 'Clic para filtrar por este origen'] : [],
+      lines: n.axis === 'origin' && onOriginChange ? [origin === n.label ? 'Clic para quitar el filtro' : 'Clic para filtrar por este origen'] : [],
     };
   }
 
   function toggleOrigin(n) {
-    if (n.axis === 'origin') onOriginChange(origin === n.label ? '' : n.label);
+    if (n.axis === 'origin' && onOriginChange) onOriginChange(origin === n.label ? '' : n.label);
   }
 
   if (!layout) return <div className="empty" ref={wrapRef}>Sin caminos para dibujar</div>;
@@ -178,9 +178,9 @@ export default function PathsHive({ paths, orders, causes, effects, metric, orig
           return (
             <g
               key={n.id}
-              className={`pv-node${n.axis === 'origin' ? ' is-clickable' : ''}`}
+              className={`pv-node${n.axis === 'origin' && onOriginChange ? ' is-clickable' : ''}`}
               tabIndex={0}
-              role={n.axis === 'origin' ? 'button' : undefined}
+              role={n.axis === 'origin' && onOriginChange ? 'button' : undefined}
               aria-label={`${AXIS[n.axis].title}: ${n.label}`}
               opacity={dim ? 0.45 : 1}
               onPointerMove={(e) => show(e, 'node', n.id, nodeTip(n))}

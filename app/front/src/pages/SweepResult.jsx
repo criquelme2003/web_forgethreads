@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiFetch } from '../api.js';
 import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
-import { extent, fmt, REFERENCE_C, RegimeLegend, regimeOf, SweepPanel } from '../components/SweepCharts.jsx';
+import { ByC, ByN, fmt, RegimeLegend } from '../components/SweepCharts.jsx';
 
 const POLL_MS = 5000;
 
@@ -11,79 +11,6 @@ function fmtDuration(s) {
   if (s < 90) return `${s.toFixed(1)} s`;
   if (s < 5400) return `${(s / 60).toFixed(1)} min`;
   return `${(s / 3600).toFixed(1)} h`;
-}
-
-/** Panel por N: media del orden según c, con error estándar y régimen de c. */
-function ByN({ stats, logY }) {
-  const ns = useMemo(() => [...new Set(stats.map((s) => s.n))].sort((a, b) => a - b), [stats]);
-  const xDomain = useMemo(() => extent(stats.map((s) => s.c), true), [stats]);
-  const yDomain = useMemo(
-    () => extent(stats.flatMap((s) => [s.media + (s.error_estandar || 0), s.media - (s.error_estandar || 0)]), logY),
-    [stats, logY],
-  );
-  return (
-    <div className="sw-grid">
-      {ns.map((n) => (
-        <SweepPanel
-          key={n}
-          title={`N = ${n}`}
-          xLabel="c (log)"
-          yLabel="orden medio L"
-          xDomain={xDomain}
-          yDomain={yDomain}
-          logY={logY}
-          refLines={REFERENCE_C}
-          points={stats.filter((s) => s.n === n).map((s) => ({
-            x: s.c,
-            y: s.media,
-            err: s.error_estandar,
-            shape: regimeOf(s.c).shape,
-            tip: [
-              ['c', fmt(s.c)],
-              ['error estándar', fmt(s.error_estandar)],
-              ['mín–máx', `${s.minimo}–${s.maximo}`],
-              ['repeticiones', s.repeticiones],
-            ],
-          }))}
-        />
-      ))}
-    </div>
-  );
-}
-
-/** Panel por c: media del orden según N, con banda entre el mínimo y el máximo. */
-function ByC({ stats, logY }) {
-  const cs = useMemo(() => [...new Set(stats.map((s) => s.c))].sort((a, b) => a - b), [stats]);
-  const xDomain = useMemo(() => extent(stats.map((s) => s.n), true), [stats]);
-  const yDomain = useMemo(() => extent(stats.flatMap((s) => [s.minimo, s.maximo]), logY), [stats, logY]);
-  return (
-    <div className="sw-grid">
-      {cs.map((c) => (
-        <SweepPanel
-          key={c}
-          title={`c = ${fmt(c)}`}
-          xLabel="N (log)"
-          yLabel="orden"
-          xDomain={xDomain}
-          yDomain={yDomain}
-          logY={logY}
-          band
-          points={stats.filter((s) => s.c === c).map((s) => ({
-            x: s.n,
-            y: s.media,
-            lo: s.minimo,
-            hi: s.maximo,
-            shape: regimeOf(c).shape,
-            tip: [
-              ['N', s.n],
-              ['mín–máx', `${s.minimo}–${s.maximo}`],
-              ['repeticiones', s.repeticiones],
-            ],
-          }))}
-        />
-      ))}
-    </div>
-  );
 }
 
 export default function SweepResult() {

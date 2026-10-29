@@ -134,3 +134,27 @@ expert_input_versions = Table(
     Column("created_at", UTCDateTime, nullable=False),
     UniqueConstraint("input_id", "version", name="uq_expert_input_versions_input_version"),
 )
+
+# Publicaciones del blog (RF-56 a RF-58). Borrador: secciones de texto (`bloques`), figuras con sus
+# permisos, palabras clave y autores. `publicado`: instantánea pública de la última publicación.
+posts = Table(
+    "posts",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("slug", String(120), nullable=False, unique=True),
+    Column("titulo", Text, nullable=False),
+    Column("resumen", Text, nullable=False, server_default=""),
+    Column(
+        "project_id", Integer, ForeignKey("projects.id", name="fk_posts_project_id_projects"), index=True
+    ),
+    Column("autor_id", Integer, ForeignKey("users.id", name="fk_posts_autor_id_users")),
+    Column("bloques", JSONType, nullable=False),
+    Column("figuras", JSONType),
+    Column("palabras_clave", JSONType),
+    Column("autores", Text, nullable=False, server_default=""),
+    Column("anonimizar", Boolean, nullable=False, server_default=true()),
+    Column("publicado", JSONType),
+    Column("publicado_at", UTCDateTime),
+    Column("created_at", UTCDateTime, nullable=False),
+    Column("updated_at", UTCDateTime, nullable=False),
+)

@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException, Request, status
 from app.core.config import get_settings
 from app.services.job_store import job_store
 from app.services.node_selector import NodeSelector
+from app.services.post_store import post_store
 from app.services.project_store import project_store
 from app.services.user_store import User, UserNotFoundError, UserStore, user_store
 from app.ssh.pool import SSHConnectionPool
@@ -23,6 +24,10 @@ def get_project_store():
 
 def get_user_store():
     return user_store
+
+
+def get_post_store():
+    return post_store
 
 
 async def require_user(

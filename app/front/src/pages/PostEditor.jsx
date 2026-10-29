@@ -1,0 +1,751 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { apiJson, send } from '../api.js';
+import { errorText } from '../components/MatricesInput.jsx';
+import PostView, { FigureBlock, HOW_TO_READ } from '../components/PostView.jsx';
+import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
+import { fmtDate } from './Projects.jsx';
+import { PostState } from './Posts.jsx';
+
+/**
+ * Editor de una publicación del blog (RF-56 a RF-58): datos del artículo (título, autores,
+ * resumen, palabras clave), secciones de texto en Markdown y figuras. Una figura se publica solo
+ * si el texto la cita ({{fig:clave}}) y tiene permiso; sus descargas tienen permisos aparte.
+ * «Vista previa» y «Publicar» guardan antes el borrador.
+ */
+
+const KIND_LABEL = { fe: 'Caminos', maxmin: 'MaxMin', sweep: 'Barrido' };
+const VIEW_OPTIONS = {
+  fe: [['sankey', 'Sankey de un orden'], ['hive', 'Hive plot (todos los órdenes)'], ['tabla', 'Tabla de caminos']],
+  maxmin: [['efectos', 'Efectos por orden']],
+  sweep: [['por_n', 'Paneles por N'], ['por_c', 'Paneles por c'], ['tabla', 'Tabla de estadísticas']],
+};
+const DEFAULT_VIEW = { fe: 'sankey', maxmin: 'efectos', sweep: 'por_n' };
+const TOP_OPTIONS = [5, 10, 25, 50, 100, 200];
+const INPUTS_HINT = {
+  fe: 'matrices CC, CE y EE de los expertos del cálculo',
+  maxmin: 'parámetros de la simulación',
+  sweep: 'parámetros del barrido',
+};
+const RESULTS_HINT = {
+  fe: 'todos los caminos de todos los órdenes',
+  maxmin: 'efectos por orden',
+  sweep: 'CSV crudo con cada repetición',
+};
+const FIG_RE = /\{\{fig:([a-z0-9_-]{1,20})\}\}/g;
+
+function publishable(j) {
+  return VIEW_OPTIONS[j.kind] && (j.status === 'success' || (j.kind === 'sweep' && j.status === 'partial'));
+}
+
+function jobDetail(j) {
+  const p = j.params || {};
+  if (j.kind === 'fe') {
+    const by = j.expertos
+      ? `agregado de ${j.expertos.length} expertos`
+      : j.experto ? (j.experto.nombre || j.experto.email) : 'cálculo suelto';
+    return `${by} · THR ${p.thr} · orden máx. ${p.maxorder}`;
+  }
+  if (j.kind === 'maxmin') return `N = ${p.numero_nodos} · c = ${p.conectividad_promedio} · THR ${p.threshold}`;
+  return `${(p.ns || []).length} valores de N × ${(p.cs || []).length} de c · ${p.reps} repeticiones`;
+}
+
+const same = (wanted, value) => wanted == null || (value != null && Math.abs(Number(wanted) - Number(value)) < 1e-9);
+
+/** ¿El job cumple lo que busca la figura? Igual que `CalcQuery.matches` del backend. */
+function matches(q, j) {
+  if (j.kind !== q.kind) return false;
+  const p = j.params || {};
+  if (q.kind === 'fe') {
+    if (q.agregado != null && Boolean(j.expertos) !== q.agregado) return false;
+    return same(q.thr, p.thr) && same(q.maxorder, p.maxorder);
+  }
+  if (q.kind === 'maxmin') return same(q.thr, p.threshold) && same(q.n, p.numero_nodos) && same(q.c, p.conectividad_promedio);
+  return same(q.thr, p.thr);
+}
+
+/** Cálculo de la figura: el concreto o el más reciente con resultados que cumpla la búsqueda. */
+function resolveJob(fig, jobs) {
+  if (!jobs) return undefined;
+  if (fig.job_id) return jobs.find((j) => j.job_id === fig.job_id && publishable(j)) || null;
+  const found = jobs.filter((j) => publishable(j) && matches(fig.buscar, j));
+  found.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return found[0] || null;
+}
+
+/** El cálculo buscado ya terminó sin resultados (error) y no hay otro en curso ni terminado. */
+function failedOnly(fig, jobs) {
+  if (!jobs || !fig.buscar) return false;
+  const found = jobs.filter((j) => matches(fig.buscar, j));
+  return found.length > 0 && found.every((j) => !publishable(j) && j.status !== 'pending');
+}
+
+function queryLabel(q) {
+  if (q.descripcion) return q.descripcion;
+  let s = { fe: 'Cálculo de caminos', maxmin: 'Cálculo MaxMin', sweep: 'Barrido' }[q.kind];
+  if (q.agregado != null) s += q.agregado ? ' agregado' : ' por experto';
+  for (const [k, v] of [['N', q.n], ['c', q.c], ['THR', q.thr], ['orden máximo', q.maxorder]]) if (v != null) s += `, ${k} ${v}`;
+  return s;
+}
+
+function defaultQuery(tipo) {
+  return tipo === 'simulacion'
+    ? { kind: 'maxmin', thr: 0.2, descripcion: '' }
+    : { kind: 'fe', agregado: false, thr: 0.2, maxorder: 3, descripcion: '' };
+}
+
+function jobLink(j) {
+  if (j.kind === 'fe') return `/fe/jobs/${j.job_id}`;
+  if (j.kind === 'maxmin') return `/maxmin/jobs/${j.job_id}`;
+  return `/sweeps/${j.job_id}`;
+}
+
+let nextKey = 1;
+const withKey = (b) => ({ ...b, _k: nextKey++ });
+const stripKey = ({ _k, ...b }) => b; // eslint-disable-line no-unused-vars
+
+function draftOf(post) {
+  return {
+    titulo: post.titulo,
+    slug: post.slug,
+    resumen: post.resumen,
+    autores: post.autores,
+    palabras: post.palabras_clave.join(', '),
+    anonimizar: post.anonimizar,
+    bloques: post.bloques.map(withKey),
+    figuras: post.figuras.map(withKey),
+  };
+}
+
+function bodyOf(draft) {
+  return {
+    titulo: draft.titulo,
+    slug: draft.slug,
+    resumen: draft.resumen,
+    autores: draft.autores,
+    palabras_clave: draft.palabras.split(',').map((k) => k.trim()).filter(Boolean),
+    anonimizar: draft.anonimizar,
+    bloques: draft.bloques.map(stripKey),
+    figuras: draft.figuras.map(stripKey),
+  };
+}
+
+function nextRef(figures) {
+  const used = new Set(figures.map((f) => f.ref));
+  let n = 1;
+  while (used.has(`f${n}`)) n += 1;
+  return `f${n}`;
+}
+
+/** Campos de la búsqueda: el cálculo más reciente del proyecto que cumpla estos parámetros. */
+function QueryFields({ q, onChange }) {
+  const num = (field) => (e) => onChange({ ...q, [field]: e.target.value === '' ? null : Number(e.target.value) });
+  const kinds = { fe: 'Caminos (forgeffects)', maxmin: 'MaxMin', sweep: 'Barrido' };
+  return (
+    <div className="controls" style={{ margin: '8px 0' }}>
+      <select value={q.kind} onChange={(e) => onChange({ kind: e.target.value, thr: q.thr ?? 0.2, descripcion: q.descripcion })} aria-label="Tipo de cálculo">
+        {Object.entries(kinds).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+      {q.kind === 'fe' && (
+        <select value={q.agregado == null ? '' : String(q.agregado)} onChange={(e) => onChange({ ...q, agregado: e.target.value === '' ? null : e.target.value === 'true' })} aria-label="Por experto o agregado">
+          <option value="false">Por experto</option>
+          <option value="true">Agregado de expertos</option>
+          <option value="">Cualquiera</option>
+        </select>
+      )}
+      {q.kind === 'maxmin' && <input className="inline-input post-num" type="number" min="2" step="2" placeholder="N" value={q.n ?? ''} onChange={num('n')} aria-label="N" />}
+      {q.kind === 'maxmin' && <input className="inline-input post-num" type="number" min="0" step="0.1" placeholder="c" value={q.c ?? ''} onChange={num('c')} aria-label="c" />}
+      <input className="inline-input post-num" type="number" min="0" max="1" step="0.05" placeholder="THR" value={q.thr ?? ''} onChange={num('thr')} aria-label="THR" />
+      {q.kind === 'fe' && <input className="inline-input post-num" type="number" min="2" max="10" placeholder="Orden máx." value={q.maxorder ?? ''} onChange={num('maxorder')} aria-label="Orden máximo" />}
+      <input className="inline-input" style={{ flex: 1 }} maxLength={300} placeholder="Descripción para el lector (opcional)" value={q.descripcion || ''} onChange={(e) => onChange({ ...q, descripcion: e.target.value })} aria-label="Descripción del cálculo" />
+    </div>
+  );
+}
+
+function FigureEditor({ fig, job, jobs, cited, projectTipo, onChange, onCite }) {
+  const kind = job?.kind || fig.buscar?.kind;
+  const p = job?.params || {};
+  const orders = job
+    ? (job.result?.orders || []).map(Number)
+    : Array.from({ length: (fig.buscar?.maxorder || 5) - 1 }, (_, i) => i + 2);
+  const set = (field) => (e) => {
+    const raw = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    const value = field === 'orden' || field === 'top' ? (raw === '' ? undefined : Number(raw)) : raw;
+    const next = { ...fig, [field]: value };
+    if (value === undefined || value === '') delete next[field];
+    onChange(next);
+  };
+  // Cambiar de cálculo concreto a búsqueda (o al revés) conserva la vista si sigue siendo válida.
+  function setSource(next) {
+    const k = next.job_id ? jobs.find((j) => j.job_id === next.job_id)?.kind : next.buscar.kind;
+    const vista = VIEW_OPTIONS[k]?.some(([v]) => v === fig.vista) ? fig.vista : DEFAULT_VIEW[k];
+    const { job_id: _j, buscar: _b, ...rest } = fig; // eslint-disable-line no-unused-vars
+    onChange({ ...rest, ...next, vista });
+  }
+  const fe = kind === 'fe';
+  const ready = (jobs || []).filter(publishable);
+  return (
+    <div className="post-calc-editor">
+      <div className="controls" style={{ marginBottom: 4 }} role="radiogroup" aria-label="Cálculo">
+        <label className="checkbox-label"><input type="radio" checked={!!fig.job_id} disabled={!ready.length} onChange={() => setSource({ job_id: (job || ready[0]).job_id })} /> Un cálculo terminado</label>
+        <label className="checkbox-label"><input type="radio" checked={!!fig.buscar} onChange={() => setSource({ buscar: job ? { ...defaultQuery(projectTipo), kind: job.kind } : defaultQuery(projectTipo) })} /> El más reciente que cumpla… (puede no existir aún)</label>
+      </div>
+      {fig.job_id && (
+        <select className="post-select" value={fig.job_id} onChange={(e) => setSource({ job_id: e.target.value })} aria-label="Cálculo">
+          {!job && <option value={fig.job_id}>job {fig.job_id} (no disponible)</option>}
+          {ready.map((j) => <option key={j.job_id} value={j.job_id}>{KIND_LABEL[j.kind]} · {jobDetail(j)} · job {j.job_id}</option>)}
+        </select>
+      )}
+      {fig.buscar && <QueryFields q={fig.buscar} onChange={(buscar) => setSource({ buscar })} />}
+      <div className="small" style={{ marginTop: 6 }}>
+        {job
+          ? <>Usa: <strong>{KIND_LABEL[job.kind]}</strong> · {jobDetail(job)} <span className="muted">· job <Link to={jobLink(job)} className="mono">{job.job_id}</Link> · {fmtDate(job.created_at)}</span></>
+          : <span className="post-pending-note">{fig.buscar ? `Aún no hay un cálculo con resultados que cumpla «${queryLabel(fig.buscar)}».` : 'El cálculo ya no está disponible.'} Mira la vista previa para saber por qué y cómo se publicará.</span>}
+      </div>
+      <div className="controls" style={{ margin: '10px 0' }}>
+        <select value={fig.vista} onChange={set('vista')} aria-label="Vista">
+          {VIEW_OPTIONS[kind].map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </select>
+        {fe && fig.vista !== 'hive' && orders.length > 0 && (
+          <select value={fig.orden ?? orders[0]} onChange={set('orden')} aria-label="Orden">
+            {orders.map((o) => <option key={o} value={o}>Orden {o}{job ? ` (${job.result?.rows_per_order?.[String(o)] ?? '?'} caminos)` : ''}</option>)}
+          </select>
+        )}
+        {fe && (job || fig.origen) && (
+          <select value={fig.origen || ''} onChange={set('origen')} aria-label="Origen">
+            <option value="">Todos los orígenes (el lector puede filtrar)</option>
+            {(p.causes || []).map((c) => <option key={c} value={c}>Solo desde «{c}»</option>)}
+          </select>
+        )}
+        {fe && (
+          <select value={fig.top ?? 50} onChange={set('top')} aria-label="Caminos">
+            {TOP_OPTIONS.map((n) => <option key={n} value={n}>{fig.vista === 'hive' ? `Top ${n} por orden` : `Top ${n} caminos`}</option>)}
+          </select>
+        )}
+        {kind === 'maxmin' && (
+          <select value={fig.escala || 'lineal'} onChange={set('escala')} aria-label="Escala">
+            <option value="lineal">Escala lineal</option>
+            <option value="log">Escala logarítmica</option>
+          </select>
+        )}
+      </div>
+      <div className="field">
+        <input value={fig.pie || ''} onChange={set('pie')} maxLength={1000} placeholder="Leyenda de la figura: qué debería notar el lector" aria-label="Leyenda" />
+      </div>
+      <div className="post-perms">
+        <label className="checkbox-label"><input type="checkbox" checked={!!fig.publico} onChange={set('publico')} /> Mostrar el gráfico en la publicación</label>
+        <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_entradas} onChange={set('descargar_entradas')} /> Permitir descargar las entradas ({INPUTS_HINT[kind]})</label>
+        <label className="checkbox-label"><input type="checkbox" checked={!!fig.descargar_resultados} onChange={set('descargar_resultados')} /> Permitir descargar los resultados completos ({RESULTS_HINT[kind]})</label>
+        <label className="checkbox-label"><input type="checkbox" checked={!!fig.en_cuerpo} onChange={set('en_cuerpo')} /> Mostrarla también en el cuerpo del texto, bajo la sección donde se cita por primera vez</label>
+      </div>
+      <div className="controls" style={{ margin: '10px 0 0' }}>
+        <button type="button" onClick={onCite}>Citar en el texto</button>
+        <span className="small muted">
+          Clave <span className="mono">{`{{fig:${fig.ref}}}`}</span> ·{' '}
+          {cited ? (fig.publico ? 'citada: se publicará' : <span style={{ color: 'var(--err)' }}>citada sin permiso: no se puede publicar</span>) : 'sin citar: no se publicará'}
+        </span>
+      </div>
+      {fe && (fig.publico || fig.descargar_entradas || fig.descargar_resultados) && (
+        <p className="small muted" style={{ margin: '8px 0 0' }}>
+          El gráfico público recibe solo los caminos que dibuja{fig.origen ? ` desde «${fig.origen}»` : ''} (top {fig.top ?? 50}). Las descargas, si las permites, incluyen los datos completos.
+        </p>
+      )}
+      <p className="small muted" style={{ margin: '8px 0 0' }}>
+        El público verá: {HOW_TO_READ[kind === 'sweep' && fig.vista === 'tabla' ? 'sweep_tabla' : fig.vista]}
+      </p>
+    </div>
+  );
+}
+
+/** Vista previa de la figura con los cambios aún sin guardar (se pide 0,4 s después del último cambio). */
+function FigurePreview({ postId, fig }) {
+  const [state, setState] = useState({ data: null, error: '', loading: true });
+  const body = JSON.stringify(stripKey(fig));
+  useEffect(() => {
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true }));
+    const t = setTimeout(async () => {
+      const { ok, data } = await send(`/app/posts/${postId}/figure-preview`, 'POST', JSON.parse(body)).catch(() => ({ ok: false, data: {} }));
+      if (cancelled) return;
+      setState(ok ? { data, error: '', loading: false } : { data: null, error: errorText(data, 'No se pudo armar la vista previa'), loading: false });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [postId, body]);
+  return (
+    <div className="post-figure-preview">
+      <div className="post-side-title">Vista previa {state.loading && <span className="muted">· actualizando…</span>}</div>
+      {state.error && <p className="status err small">{state.error}</p>}
+      {state.data?.pendiente && (
+        <p className="post-pending-note small">
+          {state.data.motivo}: se verá «{state.data.estado === 'sin_resultados' ? 'sin resultados' : 'en preparación'}».
+        </p>
+      )}
+      {state.data && (
+        <VizErrorBoundary resetKey={body}>
+          <FigureBlock b={state.data} />
+        </VizErrorBoundary>
+      )}
+    </div>
+  );
+}
+
+function CalcPicker({ jobs, onPick, onPickQuery, scope }) {
+  const options = jobs.filter(publishable);
+  return (
+    <div className="post-picker">
+      {onPickQuery && (
+        <div className="post-picker-query">
+          <div>
+            <strong>¿El cálculo aún no existe?</strong>
+            <div className="small muted">La figura busca el más reciente que cumpla los parámetros que indiques y se ve «en preparación» mientras no exista.</div>
+          </div>
+          <button type="button" className="btn" onClick={onPickQuery}>Figura de un cálculo por ejecutar</button>
+        </div>
+      )}
+      <p className="sub">{scope} Solo aparecen los terminados.</p>
+      {!options.length && <div className="empty">No hay cálculos terminados.</div>}
+      {options.length > 0 && (
+        <div style={{ overflow: 'auto', maxHeight: '60vh' }}>
+          <table>
+            <thead><tr><th>Tipo</th><th>Detalle</th><th>Fecha</th><th /></tr></thead>
+            <tbody>
+              {options.map((j) => (
+                <tr key={j.job_id}>
+                  <td>{KIND_LABEL[j.kind]}{j.status === 'partial' && <span className="small muted"> (parcial)</span>}</td>
+                  <td className="small">{jobDetail(j)}</td>
+                  <td className="small muted">{fmtDate(j.created_at)}</td>
+                  <td><button type="button" className="btn primary" onClick={() => onPick(j)}>Agregar</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Ventana modal; se cierra con Esc, con «Listo» o con un clic fuera. */
+function Modal({ title, onClose, children }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="post-modal" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
+      <div className="post-modal-body post-modal-form" onClick={(e) => e.stopPropagation()}>
+        <div className="chart-head">
+          <h2>{title}</h2>
+          <button type="button" className="btn primary" onClick={onClose}>Listo</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const VIEW_LABEL = Object.fromEntries(Object.values(VIEW_OPTIONS).flat());
+
+/** Fila compacta de una figura en la barra lateral del editor. */
+function FigureItem({ fig, job, failed, loading, cited, first, last, onEdit, onCite, onMove, onRemove }) {
+  const downloads = fig.descargar_entradas || fig.descargar_resultados;
+  let state;
+  if (loading) state = <span className="small muted">cargando…</span>;
+  else if (!job && failed) state = <span className="badge error" title="El cálculo buscado terminó con error: repítelo o cambia los parámetros">sin resultados</span>;
+  else if (cited && fig.publico && !job) state = <span className="badge pending" title="Su cálculo aún no está disponible">en preparación</span>;
+  else if (!job && !fig.buscar) state = <span className="badge error">no disponible</span>;
+  else if (cited && fig.publico) state = <span className="badge success">se publica</span>;
+  else if (cited) state = <span className="badge error">citada sin permiso</span>;
+  else state = <span className="badge estado-borrador">{fig.publico ? 'sin citar' : 'privada'}</span>;
+  return (
+    <li className="post-figitem">
+      <button type="button" className="post-figitem-main" onClick={onEdit} title="Editar figura">
+        <span className="mono">{fig.ref}</span>{' '}
+        <strong>{KIND_LABEL[job?.kind || fig.buscar?.kind] || 'Cálculo'}</strong>
+        {' · '}{VIEW_LABEL[fig.vista] || fig.vista}{fig.orden ? ` · orden ${fig.orden}` : ''}
+        {fig.buscar && <span className="post-figitem-detail">Busca: {queryLabel(fig.buscar)}</span>}
+        {job && <span className="post-figitem-detail">{fig.buscar ? 'Encontrado: ' : ''}{jobDetail(job)}</span>}
+      </button>
+      <div className="post-figitem-foot">
+        <span className="post-figitem-state">{state}{downloads && <span className="small muted" title="Con descargas permitidas"> ↓ datos</span>}{fig.en_cuerpo && <span className="small muted" title="También en el cuerpo del texto"> · en el texto</span>}</span>
+        <span className="post-figitem-actions">
+          <button type="button" onClick={onCite} title="Insertar la cita en el texto, donde está el cursor">Citar</button>
+          <button type="button" onClick={onEdit}>Editar</button>
+          <button type="button" onClick={() => onMove(-1)} disabled={first} aria-label="Subir">↑</button>
+          <button type="button" onClick={() => onMove(1)} disabled={last} aria-label="Bajar">↓</button>
+          <button type="button" onClick={onRemove} aria-label="Quitar">✕</button>
+        </span>
+      </div>
+    </li>
+  );
+}
+
+export default function PostEditor() {
+  const { postId } = useParams();
+  const navigate = useNavigate();
+  const [post, setPost] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [jobs, setJobs] = useState(null);
+  const [mode, setMode] = useState('editar');
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState({ text: '', err: false });
+  const [picker, setPicker] = useState(false);
+  const [editingKey, setEditingKey] = useState(null); // figura abierta en el modal (_k)
+  const [loadError, setLoadError] = useState('');
+  const lastText = useRef({ index: null, pos: null }); // última sección y posición del cursor
+
+  useEffect(() => {
+    send(`/app/posts/${postId}`, 'GET').then(({ ok, data }) => {
+      if (!ok) {
+        setLoadError(errorText(data, 'No se pudo cargar la publicación'));
+        return;
+      }
+      setPost(data);
+      setDraft(draftOf(data));
+      const path = data.proyecto ? `/app/projects/${data.proyecto.id}/jobs` : '/app/jobs';
+      apiJson(path).then((d) => setJobs(Array.isArray(d) ? d : [])).catch(() => setJobs([]));
+    }).catch(() => setLoadError('Error de red'));
+  }, [postId]);
+
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  const cited = useMemo(
+    () => new Set((draft?.bloques || []).flatMap((b) => [...b.markdown.matchAll(FIG_RE)].map((m) => m[1]))),
+    [draft],
+  );
+
+  function change(fields) {
+    setDraft((d) => ({ ...d, ...fields }));
+    setDirty(true);
+  }
+  function setList(key, fn) {
+    setDraft((d) => ({ ...d, [key]: fn(d[key]) }));
+    setDirty(true);
+  }
+  const updateItem = (key, i) => (b) => setList(key, (bs) => bs.map((x, j) => (j === i ? b : x)));
+  const removeItem = (key, i) => setList(key, (bs) => bs.filter((_, j) => j !== i));
+  const moveItem = (key, i, d) => setList(key, (bs) => {
+    const next = [...bs];
+    [next[i], next[i + d]] = [next[i + d], next[i]];
+    return next;
+  });
+
+  /** Inserta la cita en la sección y posición donde estaba el cursor (o al final del texto). */
+  function cite(ref) {
+    const token = `{{fig:${ref}}}`;
+    setList('bloques', (bs) => {
+      if (!bs.length) return [withKey({ tipo: 'texto', markdown: token })];
+      const { index, pos } = lastText.current;
+      const i = index != null && index < bs.length ? index : bs.length - 1;
+      const text = bs[i].markdown;
+      const at = pos != null && pos <= text.length ? pos : text.length;
+      const sep = at > 0 && !/[\s([]$/.test(text.slice(0, at)) ? ' ' : '';
+      return bs.map((b, j) => (j === i ? { ...b, markdown: `${text.slice(0, at)}${sep}${token}${text.slice(at)}` } : b));
+    });
+    report(`Cita ${token} insertada en el texto.`);
+  }
+
+  function report(text, err = false) {
+    setMsg({ text, err });
+  }
+
+  async function save() {
+    if (!dirty) return true;
+    const { ok, data } = await send(`/app/posts/${postId}`, 'PATCH', bodyOf(draft)).catch(() => ({ ok: false, data: {} }));
+    if (!ok) {
+      report(errorText(data, 'No se pudo guardar'), true);
+      return false;
+    }
+    setPost(data);
+    setDraft((d) => ({ ...d, slug: data.slug }));
+    setDirty(false);
+    return true;
+  }
+
+  async function run(label, fn) {
+    setBusy(label);
+    report('');
+    try {
+      await fn();
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const onSave = () => run('guardar', async () => {
+    if (await save()) report('Borrador guardado.');
+  });
+
+  const onPreview = () => run('vista', async () => {
+    if (!(await save())) return;
+    const { ok, data } = await send(`/app/posts/${postId}/preview`, 'GET').catch(() => ({ ok: false, data: {} }));
+    if (!ok) {
+      report(errorText(data, 'No se pudo armar la vista previa'), true);
+      return;
+    }
+    setPreview(data);
+    setMode('vista');
+  });
+
+  const onPublish = () => run('publicar', async () => {
+    if (!(await save())) return;
+    const { ok, data } = await send(`/app/posts/${postId}/publish`, 'POST').catch(() => ({ ok: false, data: {} }));
+    if (!ok) {
+      report(errorText(data, 'No se pudo publicar'), true);
+      return;
+    }
+    setPost(data);
+    report('Publicada. El público ya ve esta versión.');
+  });
+
+  const onUnpublish = () => run('retirar', async () => {
+    if (!window.confirm('¿Retirar la publicación del blog? También se cortan las descargas. El borrador se conserva.')) return;
+    const { ok, data } = await send(`/app/posts/${postId}/unpublish`, 'POST').catch(() => ({ ok: false, data: {} }));
+    if (ok) {
+      setPost(data);
+      report('Retirada del blog.');
+    } else report(errorText(data, 'No se pudo retirar'), true);
+  });
+
+  const onDelete = () => run('borrar', async () => {
+    if (!window.confirm(`¿Borrar «${post.titulo}»? No se puede deshacer.`)) return;
+    const { ok, data } = await send(`/app/posts/${postId}`, 'DELETE').catch(() => ({ ok: false, data: {} }));
+    if (ok) {
+      setDirty(false);
+      navigate(post.proyecto ? `/projects/${post.proyecto.id}/blog` : '/posts');
+    } else report(errorText(data, 'No se pudo borrar'), true);
+  });
+
+  if (loadError) {
+    return <div className="card"><p className="status err">{loadError}</p><Link to="/posts" className="small">← blog</Link></div>;
+  }
+  if (!post || !draft) return <div className="card"><div className="empty">Cargando…</div></div>;
+
+  const published = post.estado === 'publicado';
+  const editingIndex = draft.figuras.findIndex((f) => f._k === editingKey);
+  const editingFigure = editingIndex >= 0 ? { index: editingIndex, fig: draft.figuras[editingIndex] } : null;
+  const ItemBar = ({ list, i, label }) => (
+    <div className="post-block-bar">
+      <span className="small muted">{label}</span>
+      <div className="controls" style={{ marginBottom: 0 }}>
+        <button type="button" onClick={() => moveItem(list, i, -1)} disabled={i === 0} aria-label="Subir">↑</button>
+        <button type="button" onClick={() => moveItem(list, i, 1)} disabled={i === draft[list].length - 1} aria-label="Bajar">↓</button>
+        <button type="button" onClick={() => removeItem(list, i)}>Quitar</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="stack">
+      <div className="card post-editor-head">
+        <div className="small">
+          {post.proyecto
+            ? <Link to={`/projects/${post.proyecto.id}/blog`} className="muted">← publicaciones de {post.proyecto.nombre}</Link>
+            : <Link to="/posts" className="muted">← blog</Link>}
+        </div>
+        <div className="chart-head" style={{ marginTop: 6 }}>
+          <div>
+            <h1 style={{ marginBottom: 4 }}>{draft.titulo || 'Sin título'}</h1>
+            <div className="small muted">
+              <PostState post={post} />
+              {published && <> · publicada el {fmtDate(post.publicado_at)} · <a href={`/front/blog/${post.slug}`} target="_blank" rel="noreferrer">ver en el blog ↗</a></>}
+              {dirty && <> · <span style={{ color: 'var(--warn)' }}>cambios sin guardar</span></>}
+            </div>
+          </div>
+          <div className="controls" style={{ marginBottom: 0 }}>
+            <button type="button" className={mode === 'editar' ? 'primary' : undefined} aria-pressed={mode === 'editar'} onClick={() => setMode('editar')}>Editar</button>
+            <button type="button" className={mode === 'vista' ? 'primary' : undefined} aria-pressed={mode === 'vista'} onClick={onPreview} disabled={!!busy}>
+              {busy === 'vista' ? 'Armando…' : 'Vista previa'}
+            </button>
+            <button type="button" onClick={onSave} disabled={!dirty || !!busy}>{busy === 'guardar' ? 'Guardando…' : 'Guardar'}</button>
+            {/* Siempre habilitado: volver a publicar sin cambios actualiza las figuras con los cálculos nuevos. */}
+            <button
+              type="button"
+              className="primary"
+              onClick={onPublish}
+              disabled={!!busy}
+              title={published && !dirty && !post.cambios_sin_publicar ? 'Vuelve a armar las figuras con los cálculos disponibles ahora' : undefined}
+            >
+              {busy === 'publicar' ? 'Publicando…' : !published ? 'Publicar' : dirty || post.cambios_sin_publicar ? 'Publicar cambios' : 'Volver a publicar'}
+            </button>
+          </div>
+        </div>
+        {msg.text && <p className={`status small ${msg.err ? 'err' : 'ok'}`} style={{ marginBottom: 0 }}>{msg.text}</p>}
+      </div>
+
+      {mode === 'vista' && preview && (
+        <>
+          {preview.avisos.length > 0 && (
+            <div className="card no-print">
+              <h2>Antes de publicar</h2>
+              <ul className="notes">{preview.avisos.map((a) => <li key={a}>{a}</li>)}</ul>
+            </div>
+          )}
+          <div className="card post-preview"><PostView post={preview} /></div>
+        </>
+      )}
+
+      {mode === 'editar' && (
+        <div className="post-editor-layout">
+          <div className="post-editor-main">
+            <div className="card">
+              <h2 style={{ marginBottom: 12 }}>Artículo</h2>
+              <div className="grid-2" style={{ marginBottom: 14, alignItems: 'start' }}>
+                <div className="field">
+                  <label htmlFor="post-titulo">Título</label>
+                  <input id="post-titulo" value={draft.titulo} maxLength={200} onChange={(e) => change({ titulo: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label htmlFor="post-slug">Dirección</label>
+                  <input id="post-slug" value={draft.slug} maxLength={80} onChange={(e) => change({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })} />
+                  <span className="hint">/front/blog/{draft.slug || '…'}</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="post-autores">Autores</label>
+                  <input id="post-autores" value={draft.autores} maxLength={300} placeholder="A. Pérez, B. Soto" onChange={(e) => change({ autores: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label htmlFor="post-palabras">Palabras clave</label>
+                  <input id="post-palabras" value={draft.palabras} placeholder="efectos olvidados, retail" onChange={(e) => change({ palabras: e.target.value })} />
+                  <span className="hint">Separadas por comas (hasta 10).</span>
+                </div>
+              </div>
+              <div className="field" style={{ marginBottom: 14 }}>
+                <label htmlFor="post-resumen">Resumen</label>
+                <textarea id="post-resumen" rows={4} maxLength={3000} value={draft.resumen} onChange={(e) => change({ resumen: e.target.value })} placeholder="Objetivo, método, resultados principales y conclusión, en un párrafo. Aparece también en la lista del blog." />
+              </div>
+              {post.proyecto?.tipo === 'expertos' && (
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={!draft.anonimizar} onChange={(e) => change({ anonimizar: !e.target.checked })} />
+                  Mostrar el nombre de los expertos (por defecto aparecen como «Experto 1», «Experto 2»…; el correo nunca se publica)
+                </label>
+              )}
+            </div>
+
+            <h2 className="post-editor-section">Texto</h2>
+            {draft.bloques.map((b, i) => (
+              <div key={b._k} className="card post-block">
+                <ItemBar list="bloques" i={i} label={`Sección ${i + 1}`} />
+                <div className="field">
+                  <textarea
+                    rows={Math.min(24, Math.max(4, b.markdown.split('\n').length + 1))}
+                    value={b.markdown}
+                    onChange={(e) => {
+                      lastText.current = { index: i, pos: e.target.selectionStart };
+                      updateItem('bloques', i)({ ...b, markdown: e.target.value });
+                    }}
+                    onSelect={(e) => { lastText.current = { index: i, pos: e.target.selectionStart }; }}
+                    placeholder="## Título de la sección&#10;&#10;Texto. Cita figuras con {{fig:f1}}."
+                    aria-label={`Sección ${i + 1}`}
+                  />
+                </div>
+              </div>
+            ))}
+            <div className="card">
+              <div className="controls" style={{ marginBottom: 0 }}>
+                <button type="button" onClick={() => setList('bloques', (bs) => [...bs, withKey({ tipo: 'texto', markdown: '## ' })])}>Agregar sección</button>
+                <details className="small">
+                  <summary className="muted">Formato del texto (Markdown)</summary>
+                  <table className="post-md-help">
+                    <tbody>
+                      <tr><td className="mono">## Título</td><td>título de sección (se numera solo)</td></tr>
+                      <tr><td className="mono">{'{{fig:f1}}'}</td><td>cita a una figura («Figura 1»)</td></tr>
+                      <tr><td className="mono">**negrita**, *cursiva*</td><td>énfasis</td></tr>
+                      <tr><td className="mono">- elemento</td><td>lista</td></tr>
+                      <tr><td className="mono">[texto](https://…)</td><td>enlace o referencia</td></tr>
+                      <tr><td className="mono">&gt; cita</td><td>cita textual</td></tr>
+                      <tr><td className="mono">| a | b |</td><td>tabla</td></tr>
+                    </tbody>
+                  </table>
+                </details>
+              </div>
+            </div>
+
+            <div className="controls">
+              {published && <button type="button" onClick={onUnpublish} disabled={!!busy}>Retirar del blog</button>}
+              <button type="button" onClick={onDelete} disabled={!!busy}>Borrar publicación</button>
+            </div>
+          </div>
+
+          <aside className="post-editor-side card" aria-label="Figuras">
+            <div className="chart-head" style={{ marginBottom: 6 }}>
+              <h2>Figuras</h2>
+              <button type="button" className="btn primary" onClick={() => setPicker(true)}>+ Agregar</button>
+            </div>
+            <p className="small muted" style={{ margin: '0 0 10px' }}>
+              Se publican solo las citadas en el texto y con permiso, numeradas por orden de cita. Pon el cursor en el texto y usa «Citar».
+            </p>
+            {!draft.figuras.length && <div className="empty">Sin figuras todavía.</div>}
+            <ul className="post-figlist">
+              {draft.figuras.map((f, i) => (
+                <FigureItem
+                  key={f._k}
+                  fig={f}
+                  job={resolveJob(f, jobs)}
+                  failed={failedOnly(f, jobs)}
+                  loading={!jobs}
+                  cited={cited.has(f.ref)}
+                  first={i === 0}
+                  last={i === draft.figuras.length - 1}
+                  onEdit={() => setEditingKey(f._k)}
+                  onCite={() => cite(f.ref)}
+                  onMove={(d) => moveItem('figuras', i, d)}
+                  onRemove={() => window.confirm(`¿Quitar la figura «${f.ref}»? Sus citas en el texto quedarán sin figura.`) && removeItem('figuras', i)}
+                />
+              ))}
+            </ul>
+          </aside>
+        </div>
+      )}
+
+      {picker && (
+        <Modal title="Agregar una figura" onClose={() => setPicker(false)}>
+          <CalcPicker
+            jobs={jobs || []}
+            scope={post.proyecto ? `Cálculos del proyecto «${post.proyecto.nombre}».` : 'Cálculos que puedes ver.'}
+            onPickQuery={post.proyecto ? () => {
+              const fig = withKey({ ref: nextRef(draft.figuras), buscar: defaultQuery(post.proyecto.tipo), vista: post.proyecto.tipo === 'simulacion' ? 'efectos' : 'sankey', publico: false });
+              setList('figuras', (fs) => [...fs, fig]);
+              setPicker(false);
+              setEditingKey(fig._k);
+            } : undefined}
+            onPick={(j) => {
+              const fig = withKey({ ref: nextRef(draft.figuras), job_id: j.job_id, vista: DEFAULT_VIEW[j.kind], publico: false });
+              setList('figuras', (fs) => [...fs, fig]);
+              setPicker(false);
+              setEditingKey(fig._k); // sigue en el modal para elegir vista y permisos
+            }}
+          />
+        </Modal>
+      )}
+      {editingFigure && (
+        <Modal title={`Figura «${editingFigure.fig.ref}»`} onClose={() => setEditingKey(null)}>
+          <FigureEditor
+            fig={editingFigure.fig}
+            job={resolveJob(editingFigure.fig, jobs)}
+            jobs={jobs || []}
+            projectTipo={post.proyecto?.tipo}
+            cited={cited.has(editingFigure.fig.ref)}
+            onChange={updateItem('figuras', editingFigure.index)}
+            onCite={() => cite(editingFigure.fig.ref)}
+          />
+          {post.proyecto || resolveJob(editingFigure.fig, jobs) ? <FigurePreview postId={postId} fig={editingFigure.fig} /> : null}
+        </Modal>
+      )}
+    </div>
+  );
+}

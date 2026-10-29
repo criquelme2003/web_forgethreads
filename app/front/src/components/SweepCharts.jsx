@@ -203,3 +203,76 @@ export function extent(values, positive = false) {
   if (!list.length) return [1, 10];
   return [Math.min(...list), Math.max(...list)];
 }
+
+/** Panel por N: media del orden según c, con error estándar y régimen de c. */
+export function ByN({ stats, logY }) {
+  const ns = useMemo(() => [...new Set(stats.map((s) => s.n))].sort((a, b) => a - b), [stats]);
+  const xDomain = useMemo(() => extent(stats.map((s) => s.c), true), [stats]);
+  const yDomain = useMemo(
+    () => extent(stats.flatMap((s) => [s.media + (s.error_estandar || 0), s.media - (s.error_estandar || 0)]), logY),
+    [stats, logY],
+  );
+  return (
+    <div className="sw-grid">
+      {ns.map((n) => (
+        <SweepPanel
+          key={n}
+          title={`N = ${n}`}
+          xLabel="c (log)"
+          yLabel="orden medio L"
+          xDomain={xDomain}
+          yDomain={yDomain}
+          logY={logY}
+          refLines={REFERENCE_C}
+          points={stats.filter((s) => s.n === n).map((s) => ({
+            x: s.c,
+            y: s.media,
+            err: s.error_estandar,
+            shape: regimeOf(s.c).shape,
+            tip: [
+              ['c', fmt(s.c)],
+              ['error estándar', fmt(s.error_estandar)],
+              ['mín–máx', `${s.minimo}–${s.maximo}`],
+              ['repeticiones', s.repeticiones],
+            ],
+          }))}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Panel por c: media del orden según N, con banda entre el mínimo y el máximo. */
+export function ByC({ stats, logY }) {
+  const cs = useMemo(() => [...new Set(stats.map((s) => s.c))].sort((a, b) => a - b), [stats]);
+  const xDomain = useMemo(() => extent(stats.map((s) => s.n), true), [stats]);
+  const yDomain = useMemo(() => extent(stats.flatMap((s) => [s.minimo, s.maximo]), logY), [stats, logY]);
+  return (
+    <div className="sw-grid">
+      {cs.map((c) => (
+        <SweepPanel
+          key={c}
+          title={`c = ${fmt(c)}`}
+          xLabel="N (log)"
+          yLabel="orden"
+          xDomain={xDomain}
+          yDomain={yDomain}
+          logY={logY}
+          band
+          points={stats.filter((s) => s.c === c).map((s) => ({
+            x: s.n,
+            y: s.media,
+            lo: s.minimo,
+            hi: s.maximo,
+            shape: regimeOf(c).shape,
+            tip: [
+              ['N', s.n],
+              ['mín–máx', `${s.minimo}–${s.maximo}`],
+              ['repeticiones', s.repeticiones],
+            ],
+          }))}
+        />
+      ))}
+    </div>
+  );
+}
