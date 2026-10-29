@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     submit_check_delay_s: float = 2.0
     # Crea al iniciar los proyectos de muestra que falten (ver app/services/demo_seed.py)
     seed_demo_data: bool = False
+    # Crea al iniciar los proyectos por defecto que falten (ver app/services/default_projects.py)
+    seed_default_projects: bool = True
     # Jobs notifier
     callback_base_url: str | None = None  # ej http://host:8000, si None se deduce de request.host
 
