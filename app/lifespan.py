@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.db.engine import display_url, dispose_engines, get_engine
 from app.repositories.slurm import SlurmRepository
-from app.services.default_projects import seed_default_projects
+from app.services.default_projects import seed_default_posts, seed_default_projects
 from app.services.demo_seed import seed_demo, seed_demo_posts
 from app.services.job_store import job_store
 from app.services.node_selector import NodeSelector
@@ -61,6 +61,7 @@ async def global_lifespan(app: FastAPI):
     if settings.seed_default_projects and superadmin is not None:
         try:
             await seed_default_projects(project_store, owner_id=superadmin.id)
+            await seed_default_posts(project_store, post_store, job_store, superadmin, settings, pool)
         except Exception as e:  # noqa: BLE001  (los proyectos por defecto nunca impiden arrancar)
             logger.warning("No se pudieron crear los proyectos por defecto: %s", e)
 
