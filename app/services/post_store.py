@@ -3,8 +3,14 @@
 Cada publicación tiene un borrador (`bloques`) que editan los admins y, si se publicó, una
 instantánea (`publicado`) con los datos de los gráficos ya resueltos: es lo único que ve el
 público. Editar el borrador no cambia lo publicado hasta que se vuelve a publicar (RF-57).
+
+Una publicación con formato `pdf` no tiene secciones ni figuras: es un documento subido
+(`post_pdfs`) con título, autores, resumen y palabras clave. El borrador apunta a su PDF con
+`pdf_id` y la instantánea al publicado (`_privado.pdf_id`); los PDF que ya no usa ninguno de los
+dos se borran.
 """
 
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -16,7 +22,7 @@ from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.db.engine import get_engine
-from app.db.schema import posts
+from app.db.schema import post_pdfs, posts
 from app.services.job_store import resolve_database
 
 MAX_SLUG = 80
@@ -28,6 +34,24 @@ class PostNotFoundError(Exception):
 
 class SlugTakenError(Exception):
     pass
+
+
+class PdfNotFoundError(Exception):
+    pass
+
+
+@dataclass
+class PdfFile:
+    id: int
+    post_id: int
+    nombre: str
+    tamano: int
+    sha256: str
+    created_at: datetime
+    contenido: bytes | None = field(default=None, repr=False)
+
+    def meta(self) -> dict:
+        return {"nombre": self.nombre, "tamano": self.tamano, "subido_at": self.created_at.isoformat()}
 
 
 @dataclass
@@ -45,6 +69,8 @@ class Post:
     palabras_clave: list[str] = field(default_factory=list)
     autores: str = ""
     anonimizar: bool = True
+    formato: str = "articulo"  # `articulo` o `pdf`
+    pdf_id: int | None = None
     publicado: dict | None = field(default=None, repr=False)
     publicado_at: datetime | None = None
 
@@ -56,6 +82,10 @@ class Post:
     def cambios_sin_publicar(self) -> bool:
         """El borrador se editó después de la última publicación."""
         return self.publicado_at is not None and self.updated_at > self.publicado_at
+
+    @property
+    def pdf_publicado_id(self) -> int | None:
+        return ((self.publicado or {}).get("_privado") or {}).get("pdf_id")
 
 
 def slugify(text: str) -> str:
@@ -100,6 +130,8 @@ class PostStore:
             palabras_clave=m["palabras_clave"] or [],
             autores=m["autores"] or "",
             anonimizar=bool(m["anonimizar"]),
+            formato=m["formato"] or "articulo",
+            pdf_id=m["pdf_id"],
             publicado=m["publicado"],
             publicado_at=m["publicado_at"],
         )
@@ -134,6 +166,7 @@ class PostStore:
         autor_id: int | None,
         bloques: list[dict],
         figuras: list[dict] | None = None,
+        formato: str = "articulo",
     ) -> Post:
         now = datetime.now(UTC)
 
@@ -144,7 +177,7 @@ class PostStore:
                 .values(
                     slug=slug, titulo=titulo, resumen=resumen, project_id=project_id,
                     autor_id=autor_id, bloques=bloques, figuras=figuras or [], palabras_clave=[],
-                    created_at=now, updated_at=now,
+                    formato=formato, created_at=now, updated_at=now,
                 )
                 .returning(posts.c.id)
             )
@@ -216,7 +249,9 @@ class PostStore:
                 .where(posts.c.id == post_id)
                 .values(publicado=snapshot, publicado_at=now, updated_at=now)
             )
-            return await self._get(conn, post_id)
+            post = await self._get(conn, post_id)
+            await self._drop_unused_pdfs(conn, post)
+            return post
 
         return await self._write(fn)
 
@@ -226,16 +261,78 @@ class PostStore:
             await conn.execute(
                 update(posts).where(posts.c.id == post_id).values(publicado=None, publicado_at=None)
             )
-            return await self._get(conn, post_id)
+            post = await self._get(conn, post_id)
+            await self._drop_unused_pdfs(conn, post)
+            return post
 
         return await self._write(fn)
 
     async def delete(self, post_id: int) -> None:
         async def fn(conn: AsyncConnection) -> None:
             await self._get(conn, post_id)
+            await conn.execute(sql_delete(post_pdfs).where(post_pdfs.c.post_id == post_id))
             await conn.execute(sql_delete(posts).where(posts.c.id == post_id))
 
         await self._write(fn)
+
+    # --- PDF -------------------------------------------------------------------------------------
+
+    @staticmethod
+    async def _drop_unused_pdfs(conn: AsyncConnection, post: Post) -> None:
+        """Borra los PDF de la publicación que no usan ni el borrador ni lo publicado."""
+        keep = [i for i in (post.pdf_id, post.pdf_publicado_id) if i is not None]
+        stmt = sql_delete(post_pdfs).where(post_pdfs.c.post_id == post.id)
+        if keep:
+            stmt = stmt.where(post_pdfs.c.id.not_in(keep))
+        await conn.execute(stmt)
+
+    @staticmethod
+    def _row_to_pdf(row: Row, with_content: bool) -> PdfFile:
+        m = row._mapping
+        return PdfFile(
+            id=m["id"], post_id=m["post_id"], nombre=m["nombre"], tamano=m["tamano"],
+            sha256=m["sha256"], created_at=m["created_at"],
+            contenido=bytes(m["contenido"]) if with_content else None,
+        )
+
+    async def set_pdf(self, post_id: int, nombre: str, contenido: bytes) -> Post:
+        """Reemplaza el PDF del borrador; el publicado se conserva hasta volver a publicar."""
+        now = datetime.now(UTC)
+
+        async def fn(conn: AsyncConnection) -> Post:
+            await self._get(conn, post_id)
+            pdf_id = await conn.scalar(
+                insert(post_pdfs)
+                .values(
+                    post_id=post_id, nombre=nombre, tamano=len(contenido),
+                    sha256=hashlib.sha256(contenido).hexdigest(), contenido=contenido, created_at=now,
+                )
+                .returning(post_pdfs.c.id)
+            )
+            await conn.execute(update(posts).where(posts.c.id == post_id).values(pdf_id=pdf_id, updated_at=now))
+            post = await self._get(conn, post_id)
+            await self._drop_unused_pdfs(conn, post)
+            return post
+
+        return await self._write(fn)
+
+    async def get_pdf(self, pdf_id: int | None, post_id: int, with_content: bool = True) -> PdfFile:
+        """Un PDF de la publicación (sin `with_content`, solo sus datos)."""
+        if pdf_id is None:
+            raise PdfNotFoundError("La publicación no tiene PDF")
+        cols = [c for c in post_pdfs.c if with_content or c.name != "contenido"]
+
+        async def fn(conn: AsyncConnection) -> PdfFile:
+            row = (
+                await conn.execute(
+                    select(*cols).where(post_pdfs.c.id == pdf_id, post_pdfs.c.post_id == post_id)
+                )
+            ).first()
+            if row is None:
+                raise PdfNotFoundError("El PDF de la publicación ya no existe")
+            return self._row_to_pdf(row, with_content)
+
+        return await self._read(fn)
 
 
 post_store = PostStore()

@@ -10,6 +10,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -153,8 +154,29 @@ posts = Table(
     Column("palabras_clave", JSONType),
     Column("autores", Text, nullable=False, server_default=""),
     Column("anonimizar", Boolean, nullable=False, server_default=true()),
+    # `articulo` (secciones y figuras) o `pdf` (un documento subido con sus metadatos).
+    Column("formato", String(20), nullable=False, server_default="articulo"),
+    Column("pdf_id", Integer),  # PDF del borrador (post_pdfs.id)
     Column("publicado", JSONType),
     Column("publicado_at", UTCDateTime),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
+)
+
+
+# PDF de las publicaciones con formato `pdf`: el del borrador (`posts.pdf_id`) y el publicado
+# (`_privado.pdf_id` de la instantánea) pueden ser distintos hasta que se vuelve a publicar.
+post_pdfs = Table(
+    "post_pdfs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "post_id", Integer, ForeignKey("posts.id", name="fk_post_pdfs_post_id_posts"),
+        nullable=False, index=True,
+    ),
+    Column("nombre", Text, nullable=False),
+    Column("tamano", Integer, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("contenido", LargeBinary, nullable=False),
+    Column("created_at", UTCDateTime, nullable=False),
 )

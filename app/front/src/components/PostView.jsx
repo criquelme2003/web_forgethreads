@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
+import 'katex/dist/katex.min.css';
 import Markdown from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import EffectsChart, { formatCount } from './EffectsChart.jsx';
 import PathsHive from './PathsHive.jsx';
 import PathsSankey from './PathsSankey.jsx';
 import { fmtValue, tablesToPaths } from './pathsModel.js';
+import PdfViewer from './PdfViewer.jsx';
 import { ByC, ByN, fmt, RegimeLegend } from './SweepCharts.jsx';
 import VizErrorBoundary from './VizErrorBoundary.jsx';
 
@@ -13,8 +17,23 @@ import VizErrorBoundary from './VizErrorBoundary.jsx';
  * artículo: cabecera, resumen, palabras clave y secciones numeradas en la columna principal, y una
  * barra lateral con la ficha del proyecto, las figuras (numeradas por orden de cita) y los datos
  * descargables. Recibe la instantánea de `/app/blog/<slug>` o `/app/posts/<id>/preview`.
- * El Markdown se muestra sin HTML crudo (react-markdown no lo interpreta).
+ * El Markdown se muestra sin HTML crudo (react-markdown no lo interpreta) y admite LaTeX con
+ * KaTeX: `$…$` en línea y `$$…$$` en bloque. Una publicación en PDF (`formato: 'pdf'`) muestra
+ * la cabecera, el resumen y el documento.
  */
+
+const REMARK = [remarkGfm, remarkMath];
+// Sin `trust`: KaTeX no acepta \href, \url ni \includegraphics del texto.
+const REHYPE = [[rehypeKatex, { throwOnError: false, strict: 'ignore', maxSize: 50, maxExpand: 500 }]];
+
+// `$$…$$` solo en una línea también es una fórmula en bloque (remark-math pide `$$` en líneas aparte).
+const ONE_LINE_DISPLAY = /^([ \t]*)\$\$([^\n]+?)\$\$[ \t]*$/gm;
+
+/** Markdown con LaTeX: secciones y resúmenes. */
+export function MathMarkdown({ children, components }) {
+  const text = String(children ?? '').replace(ONE_LINE_DISPLAY, '$1$$$$\n$1$2\n$1$$$$');
+  return <Markdown remarkPlugins={REMARK} rehypePlugins={REHYPE} components={components}>{text}</Markdown>;
+}
 
 export const TIPO_PROYECTO = { expertos: 'Consulta a expertos', simulacion: 'Simulación' };
 
@@ -377,7 +396,62 @@ function withCitations(markdown, numbers) {
   return markdown.replace(FIG_RE, (_, ref) => (numbers[ref] ? `[Figura ${numbers[ref]}](#figura-${numbers[ref]})` : '**[figura sin publicar]**'));
 }
 
-export default function PostView({ post }) {
+function fmtSize(bytes) {
+  if (bytes == null) return '';
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+const externalLink = ({ href, children, ...rest }) => <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
+
+/** Publicación en PDF: cabecera, resumen, palabras clave y el documento. */
+function PdfPostView({ post, pdfUrl }) {
+  const slug = post.publicado_at ? post.slug : null;
+  const url = pdfUrl || (slug ? `/app/blog/${encodeURIComponent(slug)}/pdf` : null);
+  const year = new Date(post.publicado_at || Date.now()).getFullYear();
+  return (
+    <div className={post.ficha ? 'post-layout' : 'post-layout post-layout-single'}>
+      <article className="post">
+        <header className="post-head">
+          {post.proyecto && <div className="post-kicker">{TIPO_PROYECTO[post.proyecto.tipo] || post.proyecto.tipo} · {post.proyecto.nombre}</div>}
+          <h1 className="post-title">{post.titulo}</h1>
+          {post.autores && <div className="post-authors">{post.autores}</div>}
+          <div className="post-byline">
+            {post.publicado_at ? `Publicado el ${fmtDay(post.publicado_at)}` : 'Vista previa (sin publicar)'}
+            {url && post.pdf && (
+              <span className="post-pdf-links no-print">
+                <a className="btn" href={`${url}?descargar=true`} download={post.pdf.nombre}>↓ Descargar PDF ({fmtSize(post.pdf.tamano)})</a>
+                <a className="btn" href={url} target="_blank" rel="noreferrer">Abrir en otra pestaña ↗</a>
+              </span>
+            )}
+          </div>
+        </header>
+        {(post.resumen || post.palabras_clave?.length > 0) && (
+          <section className="post-abstract">
+            <h2>Resumen</h2>
+            {post.resumen && <MathMarkdown components={{ a: externalLink }}>{post.resumen}</MathMarkdown>}
+            {post.palabras_clave?.length > 0 && <p className="post-keywords"><strong>Palabras clave:</strong> {post.palabras_clave.join('; ')}</p>}
+          </section>
+        )}
+        {url && post.pdf
+          ? <PdfViewer url={url} title={post.titulo} />
+          : <div className="card"><div className="empty">Todavía no se ha subido el PDF.</div></div>}
+        <section className="post-cite">
+          <strong>Cómo citar:</strong> {post.autores || 'forgethreads'} ({year}). {post.titulo}. <em>Blog forgethreads</em>.
+          {slug && <> {window.location.origin}/front/blog/{slug}</>}
+        </section>
+      </article>
+      {post.ficha && <aside className="post-side" aria-label="Datos del proyecto"><ProjectFacts f={post.ficha} /></aside>}
+    </div>
+  );
+}
+
+/** `pdfUrl`: de dónde leer el PDF de una publicación en PDF (por defecto, el publicado). */
+export default function PostView({ post, pdfUrl }) {
+  if (post.formato === 'pdf') return <PdfPostView post={post} pdfUrl={pdfUrl} />;
+  return <ArticleView post={post} />;
+}
+
+function ArticleView({ post }) {
   const [expanded, setExpanded] = useState(null);
   const [highlight, setHighlight] = useState(null);
   const [open, setOpen] = useState(null); // número de la figura desplegada en la lista
@@ -445,14 +519,14 @@ export default function PostView({ post }) {
         {post.resumen && (
           <section className="post-abstract">
             <h2>Resumen</h2>
-            <p>{post.resumen}</p>
+            <MathMarkdown components={{ a: markdownLink }}>{post.resumen}</MathMarkdown>
             {post.palabras_clave?.length > 0 && <p className="post-keywords"><strong>Palabras clave:</strong> {post.palabras_clave.join('; ')}</p>}
           </section>
         )}
         <div className="prose post-body">
           {post.bloques.map((b, i) => (
             <div key={i} className="post-section">
-              {b.markdown.trim() && <Markdown remarkPlugins={[remarkGfm]} components={{ a: markdownLink }}>{withCitations(b.markdown, numbers)}</Markdown>}
+              {b.markdown.trim() && <MathMarkdown components={{ a: markdownLink }}>{withCitations(b.markdown, numbers)}</MathMarkdown>}
               {(inline[i] || []).map((f) => <FigureBlock key={f.ref} b={f} className="post-inline-figure" />)}
             </div>
           ))}

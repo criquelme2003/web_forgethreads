@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     jobs_db_path: str = "data/jobs.db"
     fe_results_dir: str = "data/fe_results"  # caché local de los CSV de caminos descargados de fe_job
     sweep_results_dir: str = "data/sweep_results"  # caché local de los CSV crudos de los barridos
+    post_pdf_max_mb: float = 30  # tamaño máximo del PDF de una publicación con formato `pdf`
 
     # --- Barridos (RNF-02) ---
     # Duración estimada de una repetición: base + coeficiente × (N/1000)³ segundos. Son valores de

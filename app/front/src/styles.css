@@ -235,8 +235,12 @@ a.stat-link:hover{border-color:#9ca3af}
 .blog-item:hover{border-color:#9ca3af}
 .blog-item h2{font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:600;margin:4px 0 4px;letter-spacing:-.01em}
 .blog-item p{margin:0 0 8px;color:#374151;font-size:14px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.blog-item-summary{margin:0 0 8px;color:#374151;font-size:14px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.blog-item-summary p{display:inline;margin:0}
+.blog-item-summary p+p::before{content:" "}
 .post-layout{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:40px;align-items:start}
 @media(max-width:980px){.post-layout{grid-template-columns:minmax(0,1fr)}}
+.post-layout-single{grid-template-columns:minmax(0,920px)}
 .post{min-width:0}
 .post-head{border-bottom:1px solid var(--border);padding-bottom:16px;margin-bottom:18px}
 .post-kicker{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600}
@@ -247,6 +251,20 @@ a.stat-link:hover{border-color:#9ca3af}
 .post-abstract h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
 .post-abstract p{margin:0;font-size:15px;line-height:1.65}
 .post-abstract .post-keywords{margin-top:10px;font-size:13.5px}
+.post-abstract p+p{margin-top:8px}
+/* LaTeX (KaTeX): las fórmulas en bloque anchas se desplazan en vez de desbordar la columna. */
+.post .katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}
+.post .katex{font-size:1.08em}
+.post .katex-error{color:var(--err);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
+/* Publicación en PDF */
+.post-pdf-links{display:inline-flex;flex-wrap:wrap;gap:8px;margin-left:12px;vertical-align:middle}
+.post-pdf-links .btn{font-size:12px;padding:5px 9px}
+.pdf-viewer{display:grid;gap:12px;min-width:0;background:#e5e7eb;border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.pdf-page{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.15);min-height:120px;overflow:hidden}
+.pdf-page canvas{display:block;width:100%;height:auto}
+.pdf-pages{text-align:center}
+.post-pdf-upload{display:grid;gap:10px}
+.post-pdf-file{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
 .prose{font-family:Georgia,'Times New Roman',serif;font-size:17px;line-height:1.75;max-width:68ch}
 .post-body{counter-reset:sec}
 .post-body .post-section>h2{counter-increment:sec;counter-reset:sub}

@@ -1004,20 +1004,24 @@ function ProjectPosts({ project }) {
     apiJson(`/app/posts?project_id=${project.id}`).then((d) => setPosts(Array.isArray(d) ? d : [])).catch(() => setPosts([]));
   }, [project.id]);
 
-  async function create() {
-    setMsg(await createPost(navigate, { titulo: project.nombre, project_id: project.id }));
+  async function create(formato) {
+    setMsg(await createPost(navigate, { titulo: project.nombre, project_id: project.id, formato }));
   }
 
   return (
     <div className="card">
       <div className="chart-head">
         <h2>Publicaciones</h2>
-        <button type="button" className="btn primary" onClick={create}>Nueva publicación</button>
+        <div className="controls" style={{ marginBottom: 0 }}>
+          <button type="button" className="btn" onClick={() => create('pdf')}>Subir un PDF</button>
+          <button type="button" className="btn primary" onClick={() => create('articulo')}>Nueva publicación</button>
+        </div>
       </div>
       <p className="sub">
         Cuenta los resultados del proyecto en el <a href="/front/blog" target="_blank" rel="noreferrer">blog público</a>.
         El proyecto puede tener varias publicaciones. Una nueva parte con las secciones de un artículo y el cálculo terminado más
         reciente como figura; luego puedes agregar otros cálculos y decidir cuáles se muestran y cuáles datos se pueden descargar.
+        También puedes publicar un PDF ya terminado (un artículo o una tesis) con su título, autores, resumen y palabras clave.
       </p>
       {msg && <p className="status err small">{msg}</p>}
       {posts ? <PostTable posts={posts} /> : <div className="empty">Cargando…</div>}

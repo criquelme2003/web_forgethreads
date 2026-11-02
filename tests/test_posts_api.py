@@ -54,7 +54,7 @@ def env(tmp_path: Path, database: str, monkeypatch):
 
     monkeypatch.setattr(fe_api, "download_fe_results", fake_fe_download)
     monkeypatch.setattr(sweeps_api, "download_sweep_results", fake_sweep_download)
-    settings = _settings(tmp_path, sweep_results_dir=str(tmp_path / "sweeps"))
+    settings = _settings(tmp_path, sweep_results_dir=str(tmp_path / "sweeps"), post_pdf_max_mb=0.01)
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_job_store] = lambda: store
     app.dependency_overrides[get_project_store] = lambda: projects
@@ -64,7 +64,7 @@ def env(tmp_path: Path, database: str, monkeypatch):
     app.dependency_overrides[get_node_selector] = lambda: FakeSelector()
     with TestClient(app) as client:
         assert _login(client) == 200
-        yield {"client": client, "store": store, "projects": projects, "downloads": downloads}
+        yield {"client": client, "store": store, "projects": projects, "posts": posts, "downloads": downloads}
     app.dependency_overrides.clear()
 
 
@@ -118,6 +118,8 @@ def _text(markdown: str) -> dict:
         ("get", "/app/posts/1/preview"),
         ("post", "/app/posts/1/publish"),
         ("post", "/app/posts/1/unpublish"),
+        ("put", "/app/posts/1/pdf"),
+        ("get", "/app/posts/1/pdf"),
     ],
 )
 def test_post_routes_require_auth(client: TestClient, method: str, path: str) -> None:
@@ -435,3 +437,99 @@ def test_figure_without_results_is_not_left_in_preparation(env) -> None:
     preview = client.get(f"/app/posts/{post['id']}/preview").json()
     assert preview["figuras"][0]["datos"]["effects_by_order"] == []
     assert any("no tiene datos con estos parámetros (THR 0.2)" in a for a in preview["avisos"])
+
+
+PDF_V1 = b"%PDF-1.4\n% version 1\n%%EOF\n"
+PDF_V2 = b"%PDF-1.7\n% version 2\n%%EOF\n"
+
+
+def _upload(client: TestClient, post_id: int, content: bytes, name: str = "articulo.pdf"):
+    return client.put(f"/app/posts/{post_id}/pdf", files={"archivo": (name, content, "application/pdf")})
+
+
+def test_pdf_post_lifecycle(env) -> None:
+    client = env["client"]
+    project, _ = _expert_project(env)
+    res = client.post("/app/posts", json={"titulo": "Tesis", "project_id": project["id"], "formato": "pdf"})
+    assert res.status_code == 201, res.text
+    post = res.json()
+    assert post["formato"] == "pdf" and post["pdf"] is None
+    assert post["bloques"] == [] and post["figuras"] == []  # sin plantilla
+    pid = post["id"]
+
+    # Sin PDF no se publica; un PDF no tiene secciones ni figuras.
+    assert client.post(f"/app/posts/{pid}/publish").status_code == 422
+    assert client.patch(f"/app/posts/{pid}", json={"bloques": [_text("## Hola")]}).status_code == 422
+    res = client.patch(
+        f"/app/posts/{pid}",
+        json={"resumen": "Con $x^2$.", "autores": "A. Pérez", "palabras_clave": ["tesis", "pdf"],
+              "bloques": [], "figuras": []},
+    )
+    assert res.status_code == 200, res.text
+
+    # Solo PDF reales; el nombre se limpia.
+    assert _upload(client, pid, b"<html>no</html>").status_code == 422
+    res = _upload(client, pid, PDF_V1, name="../Mi tesis<final>")
+    assert res.status_code == 200, res.text
+    assert res.json()["pdf"]["nombre"] == "Mi tesis_final.pdf"
+    assert res.json()["pdf"]["tamano"] == len(PDF_V1)
+    draft = client.get(f"/app/posts/{pid}/pdf")
+    assert draft.status_code == 200 and draft.content == PDF_V1
+    assert draft.headers["content-type"] == "application/pdf"
+    assert draft.headers["content-disposition"].startswith("inline")
+    assert client.get(f"/app/posts/{pid}/pdf?descargar=true").headers["content-disposition"].startswith("attachment")
+
+    preview = client.get(f"/app/posts/{pid}/preview").json()
+    assert preview["formato"] == "pdf" and preview["pdf"]["nombre"] == "Mi tesis_final.pdf"
+    assert preview["avisos"] == []
+    assert client.post(f"/app/posts/{pid}/publish").status_code == 200
+
+    public = TestClient(client.app)
+    blog = public.get("/app/blog").json()
+    assert [(p["slug"], p["formato"]) for p in blog] == [("tesis", "pdf")]
+    item = public.get("/app/blog/tesis").json()
+    assert item["formato"] == "pdf" and item["resumen"] == "Con $x^2$."
+    assert item["palabras_clave"] == ["tesis", "pdf"] and "_privado" not in item
+    assert public.get("/app/blog/tesis/pdf").content == PDF_V1
+    assert public.get(f"/app/posts/{pid}/pdf").status_code == 401
+
+    # Un PDF nuevo queda en el borrador: el público sigue viendo el publicado.
+    res = _upload(client, pid, PDF_V2)
+    assert res.json()["cambios_sin_publicar"] is True
+    assert client.get(f"/app/posts/{pid}/pdf").content == PDF_V2
+    assert public.get("/app/blog/tesis/pdf").content == PDF_V1
+    _upload(client, pid, PDF_V2, name="otra.pdf")  # el intermedio, sin uso, se borra
+    count = asyncio.run(_pdf_count(env, pid))
+    assert count == 2  # el del borrador y el publicado
+    assert client.post(f"/app/posts/{pid}/publish").status_code == 200
+    assert public.get("/app/blog/tesis/pdf").content == PDF_V2
+    assert asyncio.run(_pdf_count(env, pid)) == 1
+
+    assert client.post(f"/app/posts/{pid}/unpublish").status_code == 200
+    assert public.get("/app/blog/tesis/pdf").status_code == 404
+    assert client.delete(f"/app/posts/{pid}").status_code == 204
+    assert asyncio.run(_pdf_count(env, pid)) == 0
+
+
+async def _pdf_count(env, post_id: int) -> int:
+    from sqlalchemy import func, select
+
+    from app.db.schema import post_pdfs
+
+    posts: PostStore = env["posts"]
+    return await posts._read(
+        lambda conn: conn.scalar(select(func.count()).select_from(post_pdfs).where(post_pdfs.c.post_id == post_id))
+    )
+
+
+def get_settings_override(client: TestClient):
+    return client.app.dependency_overrides[get_settings]()
+
+
+def test_pdf_upload_rules(env) -> None:
+    client = env["client"]
+    article = client.post("/app/posts", json={"titulo": "Artículo"}).json()
+    assert _upload(client, article["id"], PDF_V1).status_code == 422  # no es una publicación en PDF
+    post = client.post("/app/posts", json={"titulo": "Grande", "formato": "pdf"}).json()
+    limit = int(get_settings_override(client).post_pdf_max_mb * 1024 * 1024)
+    assert _upload(client, post["id"], b"%PDF-" + b"0" * limit).status_code == 413

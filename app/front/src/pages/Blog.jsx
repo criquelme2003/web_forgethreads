@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import PostView, { fmtDay, TIPO_PROYECTO } from '../components/PostView.jsx';
+import PostView, { fmtDay, MathMarkdown, TIPO_PROYECTO } from '../components/PostView.jsx';
 
 /** Blog público (sin sesión): lista de publicaciones y cada publicación (RF-56). */
+
+// Dentro del enlace de cada publicación no puede haber otros enlaces.
+const NO_LINKS = { a: ({ children }) => <span>{children}</span> };
 
 function BlogShell({ children }) {
   useEffect(() => {
@@ -69,8 +72,9 @@ export function BlogIndex() {
             {p.proyecto && <div className="post-kicker">{TIPO_PROYECTO[p.proyecto.tipo] || p.proyecto.tipo} · {p.proyecto.nombre}</div>}
             <h2>{p.titulo}</h2>
             {p.autores && <div className="small" style={{ marginBottom: 6 }}>{p.autores}</div>}
-            {p.resumen && <p>{p.resumen}</p>}
+            {p.resumen && <div className="blog-item-summary"><MathMarkdown components={NO_LINKS}>{p.resumen}</MathMarkdown></div>}
             <div className="small muted">
+              {p.formato === 'pdf' && <span className="pill" style={{ marginRight: 6 }}>PDF</span>}
               {fmtDay(p.publicado_at)}
               {p.palabras_clave?.length ? ` · ${p.palabras_clave.join(', ')}` : ''}
               {p.graficos > 0 ? ` · ${p.graficos} ${p.graficos === 1 ? 'gráfico' : 'gráficos'}` : ''}

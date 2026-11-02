@@ -474,7 +474,7 @@ async def _republish(slug, projects, posts, jobs, owner, settings, pool) -> None
         return
     project = await projects.get_project(post.project_id)
     try:
-        await posts.publish(post.id, await _Renderer(post, project, owner, jobs, projects, settings, pool).render())
+        await posts.publish(post.id, await _Renderer(post, project, owner, jobs, projects, settings, pool, posts).render())
     except HTTPException as e:
         logger.warning("No se pudo volver a publicar %s: %s", slug, e.detail)
 

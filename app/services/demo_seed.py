@@ -239,7 +239,7 @@ async def seed_demo_posts(
             figuras=[Figure.model_validate(f).model_dump(exclude_none=True) for f in spec["figuras"]],
         )
         try:
-            view = await _Renderer(post, project, owner, jobs, projects, settings, pool).render()
+            view = await _Renderer(post, project, owner, jobs, projects, settings, pool, posts).render()
             await posts.publish(post.id, view)
         except HTTPException as e:  # queda como borrador
             logger.warning("No se pudo publicar %s: %s", spec["slug"], e.detail)

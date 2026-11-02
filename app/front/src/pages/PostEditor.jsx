@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiJson, send } from '../api.js';
+import { apiFetch, apiJson, send } from '../api.js';
 import { errorText } from '../components/MatricesInput.jsx';
 import PostView, { FigureBlock, HOW_TO_READ } from '../components/PostView.jsx';
 import VizErrorBoundary from '../components/VizErrorBoundary.jsx';
@@ -9,7 +9,8 @@ import { PostState } from './Posts.jsx';
 
 /**
  * Editor de una publicación del blog (RF-56 a RF-58): datos del artículo (título, autores,
- * resumen, palabras clave), secciones de texto en Markdown y figuras. Una figura se publica solo
+ * resumen, palabras clave), secciones de texto en Markdown (con LaTeX) y figuras; o, si la
+ * publicación es un PDF, sus datos y el documento. Una figura se publica solo
  * si el texto la cita ({{fig:clave}}) y tiene permiso; sus descargas tienen permisos aparte.
  * «Vista previa» y «Publicar» guardan antes el borrador.
  */
@@ -384,6 +385,85 @@ function FigureItem({ fig, job, failed, loading, cited, first, last, onEdit, onC
   );
 }
 
+/** Datos de la publicación: título, dirección, autores, palabras clave y resumen. */
+function ArticleFields({ post, draft, change }) {
+  const pdf = post.formato === 'pdf';
+  return (
+    <div className="card">
+      <h2 style={{ marginBottom: 12 }}>{pdf ? 'Publicación en PDF' : 'Artículo'}</h2>
+      <div className="grid-2" style={{ marginBottom: 14, alignItems: 'start' }}>
+        <div className="field">
+          <label htmlFor="post-titulo">Título</label>
+          <input id="post-titulo" value={draft.titulo} maxLength={200} onChange={(e) => change({ titulo: e.target.value })} />
+        </div>
+        <div className="field">
+          <label htmlFor="post-slug">Dirección</label>
+          <input id="post-slug" value={draft.slug} maxLength={80} onChange={(e) => change({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })} />
+          <span className="hint">/front/blog/{draft.slug || '…'}</span>
+        </div>
+        <div className="field">
+          <label htmlFor="post-autores">Autores</label>
+          <input id="post-autores" value={draft.autores} maxLength={300} placeholder="A. Pérez, B. Soto" onChange={(e) => change({ autores: e.target.value })} />
+        </div>
+        <div className="field">
+          <label htmlFor="post-palabras">Palabras clave</label>
+          <input id="post-palabras" value={draft.palabras} placeholder="efectos olvidados, retail" onChange={(e) => change({ palabras: e.target.value })} />
+          <span className="hint">Separadas por comas (hasta 10).</span>
+        </div>
+      </div>
+      <div className="field" style={{ marginBottom: 14 }}>
+        <label htmlFor="post-resumen">{pdf ? 'Resumen (abstract)' : 'Resumen'}</label>
+        <textarea id="post-resumen" rows={4} maxLength={3000} value={draft.resumen} onChange={(e) => change({ resumen: e.target.value })} placeholder="Objetivo, método, resultados principales y conclusión, en un párrafo. Aparece también en la lista del blog." />
+        <span className="hint">Admite LaTeX: $x^2$ en línea y $$…$$ en bloque.</span>
+      </div>
+      {post.proyecto?.tipo === 'expertos' && !pdf && (
+        <label className="checkbox-label">
+          <input type="checkbox" checked={!draft.anonimizar} onChange={(e) => change({ anonimizar: !e.target.checked })} />
+          Mostrar el nombre de los expertos (por defecto aparecen como «Experto 1», «Experto 2»…; el correo nunca se publica)
+        </label>
+      )}
+    </div>
+  );
+}
+
+/** PDF de una publicación en PDF: el archivo actual y el botón para subir o reemplazarlo. */
+function PdfUpload({ post, busy, onUpload }) {
+  const input = useRef(null);
+  const pdf = post.pdf;
+  return (
+    <div className="card post-pdf-upload">
+      <h2>Documento</h2>
+      {pdf ? (
+        <div className="post-pdf-file">
+          <strong>{pdf.nombre}</strong>
+          <span className="small muted">{(pdf.tamano / 1024 / 1024).toFixed(2).replace('.', ',')} MB · subido el {fmtDate(pdf.subido_at)}</span>
+          <a className="small" href={`/app/posts/${post.id}/pdf`} target="_blank" rel="noreferrer">abrir ↗</a>
+        </div>
+      ) : <p className="small muted" style={{ margin: 0 }}>Todavía no hay un PDF. Súbelo para poder publicar.</p>}
+      <div className="controls" style={{ marginBottom: 0 }}>
+        <input
+          ref={input}
+          type="file"
+          accept="application/pdf,.pdf"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) onUpload(file);
+          }}
+        />
+        <button type="button" className={pdf ? undefined : 'primary'} onClick={() => input.current?.click()} disabled={!!busy}>
+          {busy === 'pdf' ? 'Subiendo…' : pdf ? 'Reemplazar PDF' : 'Subir PDF'}
+        </button>
+      </div>
+      <p className="small muted" style={{ margin: 0 }}>
+        El blog muestra el PDF tal cual, junto al título, los autores, el resumen y las palabras clave de arriba, y permite descargarlo.
+        Un PDF nuevo no reemplaza al publicado hasta que vuelvas a publicar.
+      </p>
+    </div>
+  );
+}
+
 export default function PostEditor() {
   const { postId } = useParams();
   const navigate = useNavigate();
@@ -512,6 +592,19 @@ export default function PostEditor() {
     report('Publicada. El público ya ve esta versión.');
   });
 
+  const onUpload = (file) => run('pdf', async () => {
+    const form = new FormData();
+    form.append('archivo', file);
+    const res = await apiFetch(`/app/posts/${postId}/pdf`, { method: 'PUT', body: form }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
+    if (!res?.ok) {
+      report(res?.status === 413 ? data.detail || 'El PDF es demasiado grande' : errorText(data, 'No se pudo subir el PDF'), true);
+      return;
+    }
+    setPost(data);
+    report(data.estado === 'publicado' ? 'PDF subido. Publica los cambios para que el público lo vea.' : 'PDF subido.');
+  });
+
   const onUnpublish = () => run('retirar', async () => {
     if (!window.confirm('¿Retirar la publicación del blog? También se cortan las descargas. El borrador se conserva.')) return;
     const { ok, data } = await send(`/app/posts/${postId}/unpublish`, 'POST').catch(() => ({ ok: false, data: {} }));
@@ -595,46 +688,25 @@ export default function PostEditor() {
               <ul className="notes">{preview.avisos.map((a) => <li key={a}>{a}</li>)}</ul>
             </div>
           )}
-          <div className="card post-preview"><PostView post={preview} /></div>
+          <div className="card post-preview"><PostView post={preview} pdfUrl={`/app/posts/${postId}/pdf`} /></div>
         </>
       )}
 
-      {mode === 'editar' && (
+      {mode === 'editar' && post.formato === 'pdf' && (
+        <div className="post-editor-main">
+          <ArticleFields post={post} draft={draft} change={change} />
+          <PdfUpload post={post} busy={busy} onUpload={onUpload} />
+          <div className="controls">
+            {published && <button type="button" onClick={onUnpublish} disabled={!!busy}>Retirar del blog</button>}
+            <button type="button" onClick={onDelete} disabled={!!busy}>Borrar publicación</button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'editar' && post.formato !== 'pdf' && (
         <div className="post-editor-layout">
           <div className="post-editor-main">
-            <div className="card">
-              <h2 style={{ marginBottom: 12 }}>Artículo</h2>
-              <div className="grid-2" style={{ marginBottom: 14, alignItems: 'start' }}>
-                <div className="field">
-                  <label htmlFor="post-titulo">Título</label>
-                  <input id="post-titulo" value={draft.titulo} maxLength={200} onChange={(e) => change({ titulo: e.target.value })} />
-                </div>
-                <div className="field">
-                  <label htmlFor="post-slug">Dirección</label>
-                  <input id="post-slug" value={draft.slug} maxLength={80} onChange={(e) => change({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })} />
-                  <span className="hint">/front/blog/{draft.slug || '…'}</span>
-                </div>
-                <div className="field">
-                  <label htmlFor="post-autores">Autores</label>
-                  <input id="post-autores" value={draft.autores} maxLength={300} placeholder="A. Pérez, B. Soto" onChange={(e) => change({ autores: e.target.value })} />
-                </div>
-                <div className="field">
-                  <label htmlFor="post-palabras">Palabras clave</label>
-                  <input id="post-palabras" value={draft.palabras} placeholder="efectos olvidados, retail" onChange={(e) => change({ palabras: e.target.value })} />
-                  <span className="hint">Separadas por comas (hasta 10).</span>
-                </div>
-              </div>
-              <div className="field" style={{ marginBottom: 14 }}>
-                <label htmlFor="post-resumen">Resumen</label>
-                <textarea id="post-resumen" rows={4} maxLength={3000} value={draft.resumen} onChange={(e) => change({ resumen: e.target.value })} placeholder="Objetivo, método, resultados principales y conclusión, en un párrafo. Aparece también en la lista del blog." />
-              </div>
-              {post.proyecto?.tipo === 'expertos' && (
-                <label className="checkbox-label">
-                  <input type="checkbox" checked={!draft.anonimizar} onChange={(e) => change({ anonimizar: !e.target.checked })} />
-                  Mostrar el nombre de los expertos (por defecto aparecen como «Experto 1», «Experto 2»…; el correo nunca se publica)
-                </label>
-              )}
-            </div>
+            <ArticleFields post={post} draft={draft} change={change} />
 
             <h2 className="post-editor-section">Texto</h2>
             {draft.bloques.map((b, i) => (
@@ -659,7 +731,7 @@ export default function PostEditor() {
               <div className="controls" style={{ marginBottom: 0 }}>
                 <button type="button" onClick={() => setList('bloques', (bs) => [...bs, withKey({ tipo: 'texto', markdown: '## ' })])}>Agregar sección</button>
                 <details className="small">
-                  <summary className="muted">Formato del texto (Markdown)</summary>
+                  <summary className="muted">Formato del texto (Markdown y LaTeX)</summary>
                   <table className="post-md-help">
                     <tbody>
                       <tr><td className="mono">## Título</td><td>título de sección (se numera solo)</td></tr>
@@ -669,6 +741,8 @@ export default function PostEditor() {
                       <tr><td className="mono">[texto](https://…)</td><td>enlace o referencia</td></tr>
                       <tr><td className="mono">&gt; cita</td><td>cita textual</td></tr>
                       <tr><td className="mono">| a | b |</td><td>tabla</td></tr>
+                      <tr><td className="mono">{'$\\alpha_i^2$'}</td><td>fórmula LaTeX en la línea</td></tr>
+                      <tr><td className="mono">{'$$\\sum_{i=1}^n x_i$$'}</td><td>fórmula LaTeX en bloque (centrada)</td></tr>
                     </tbody>
                   </table>
                 </details>

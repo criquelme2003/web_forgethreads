@@ -21,6 +21,13 @@ resultados no se pueden leer, la figura se publica como «en preparación» y la
 Opcionalmente (`en_cuerpo`), una figura también se muestra en el texto, bajo la sección donde se
 cita por primera vez. La vista pública se puede imprimir o guardar como PDF desde el navegador.
 
+Una publicación también puede ser un PDF (`formato="pdf"`): el documento subido más título,
+autores, resumen y palabras clave. No tiene secciones ni figuras; el blog solo lo muestra y lo
+deja descargar. Como el resto, el público ve el PDF de la última publicación aunque el borrador
+tenga otro.
+
+Las secciones de texto admiten LaTeX (`$…$` en línea y `$$…$$` en bloque); lo dibuja el SPA.
+
 Acceso: una publicación de un proyecto la editan sus admins (dueño y co-admins); una sin
 proyecto, su autor. El superadmin edita todas. Para las demás se responde 404.
 """
@@ -32,8 +39,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -53,7 +61,15 @@ from app.api.sweeps import _ensure_raw_csv
 from app.core.config import Settings, get_settings
 from app.services.job_store import JobNotFoundError, JobRecord, JobStore
 from app.services.maxmin_log import parse_maxmin_log
-from app.services.post_store import MAX_SLUG, Post, PostNotFoundError, PostStore, SlugTakenError
+from app.services.post_store import (
+    MAX_SLUG,
+    PdfFile,
+    PdfNotFoundError,
+    Post,
+    PostNotFoundError,
+    PostStore,
+    SlugTakenError,
+)
 from app.services.project_store import Project, ProjectNotFoundError, ProjectStore
 from app.services.sweep import combination_stats, parse_raw_csv
 from app.services.user_store import User, UserNotFoundError, UserStore
@@ -199,6 +215,9 @@ class PostCreate(BaseModel):
     titulo: str = Field(..., min_length=1, max_length=MAX_TITLE)
     project_id: int | None = None
     plantilla: bool = Field(default=True, description="Precargar las secciones y el último cálculo del proyecto")
+    formato: Literal["articulo", "pdf"] = Field(
+        default="articulo", description="Artículo con secciones y figuras, o un PDF subido que solo se muestra"
+    )
 
 
 class PostUpdate(BaseModel):
@@ -249,6 +268,8 @@ class PostOut(BaseModel):
     bloques: list[dict]
     figuras: list[dict]
     anonimizar: bool
+    formato: Literal["articulo", "pdf"]
+    pdf: dict | None  # PDF del borrador: nombre, tamaño y fecha de subida
     estado: Literal["borrador", "publicado"]
     cambios_sin_publicar: bool
     publicado_at: datetime | None
@@ -271,6 +292,7 @@ class PublicPostSummary(BaseModel):
     proyecto: PublicProject | None
     publicado_at: datetime | None
     graficos: int
+    formato: Literal["articulo", "pdf"] = "articulo"
 
 
 class PublicPost(PublicPostSummary):
@@ -278,6 +300,7 @@ class PublicPost(PublicPostSummary):
     ficha: dict | None
     bloques: list[dict]
     figuras: list[dict]
+    pdf: dict | None = None  # nombre y tamaño del PDF (formato `pdf`)
     avisos: list[str] = []  # solo en la vista previa: figuras que no se publicarán y por qué
 
 
@@ -333,7 +356,18 @@ async def _author_name(autor_id: int | None, users: UserStore) -> str | None:
     return author.nombre or None  # el correo del autor no se muestra al público
 
 
-def _post_out(post: Post, project: Project | None, autor: str | None, settings: Settings, request: Request) -> PostOut:
+async def _pdf_meta(post: Post, posts: PostStore) -> dict | None:
+    try:
+        return (await posts.get_pdf(post.pdf_id, post.id, with_content=False)).meta()
+    except PdfNotFoundError:
+        return None
+
+
+async def _post_out(
+    post: Post, project: Project | None, users: UserStore, posts: PostStore, settings: Settings,
+    request: Request,
+) -> PostOut:
+    autor = await _author_name(post.autor_id, users)
     return PostOut(
         id=post.id,
         slug=post.slug,
@@ -346,6 +380,8 @@ def _post_out(post: Post, project: Project | None, autor: str | None, settings: 
         bloques=post.bloques,
         figuras=post.figuras,
         anonimizar=post.anonimizar,
+        formato=post.formato,
+        pdf=await _pdf_meta(post, posts) if post.formato == "pdf" else None,
         estado=post.estado,
         cambios_sin_publicar=post.cambios_sin_publicar,
         publicado_at=post.publicado_at,
@@ -467,8 +503,10 @@ class _Renderer:
     """Arma la vista pública: textos, ficha y datos de las figuras citadas y con permiso."""
 
     def __init__(self, post: Post, project: Project | None, user: User, store: JobStore,
-                 projects: ProjectStore, settings: Settings, pool: SSHConnectionPool) -> None:
+                 projects: ProjectStore, settings: Settings, pool: SSHConnectionPool,
+                 post_store: PostStore) -> None:
         self.post, self.project, self.user = post, project, user
+        self.post_store = post_store
         self.store, self.projects, self.settings, self.pool = store, projects, settings, pool
         self._labels: dict[int, dict[int, str]] = {}  # por proyecto: input_id → etiqueta
         self.thr: set[float] = set()
@@ -495,6 +533,8 @@ class _Renderer:
         return self._labels[project_id]
 
     async def render(self) -> dict:
+        if self.post.formato == "pdf":
+            return await self.render_pdf()
         figures = {f["ref"]: Figure.model_validate(f) for f in self.post.figuras}
         for fig in figures.values():  # una vista que no corresponde se informa por su clave
             try:
@@ -564,6 +604,32 @@ class _Renderer:
             "bloques": [{"tipo": "texto", "markdown": s.get("markdown", "")} for s in self.post.bloques],
             "figuras": out_figures,
             "_privado": {"figuras": private},  # para las descargas; nunca se envía al público
+        }
+
+    async def render_pdf(self) -> dict:
+        """Publicación en PDF: datos del artículo y el PDF del borrador, sin figuras."""
+        try:
+            pdf: PdfFile | None = await self.post_store.get_pdf(self.post.pdf_id, self.post.id, with_content=False)
+        except PdfNotFoundError:
+            pdf = None
+            self.errores.append("Sube el PDF de la publicación antes de publicarla.")
+        if not self.post.resumen.strip():
+            self.avisos.append("La publicación no tiene resumen: el blog solo mostrará el título y el PDF.")
+        project = self.project
+        return {
+            "formato": "pdf",
+            "titulo": self.post.titulo,
+            "resumen": self.post.resumen,
+            "autores": self.post.autores,
+            "palabras_clave": self.post.palabras_clave,
+            "proyecto": {"nombre": project.nombre, "tipo": project.tipo} if project else None,
+            "ficha": await self.project_card() if project else None,
+            "graficos": 0,
+            "parametros": {"thr": [], "maxorder": [], "reps": [], "expertos": 0},
+            "bloques": [],
+            "figuras": [],
+            "pdf": {"nombre": pdf.nombre, "tamano": pdf.tamano} if pdf else None,
+            "_privado": {"figuras": {}, "pdf_id": pdf.id if pdf else None},
         }
 
     async def project_card(self) -> dict:
@@ -745,7 +811,7 @@ async def list_posts(
             cache[post.project_id] = await _project_or_none(post.project_id, projects)
         project = cache.get(post.project_id) if post.project_id is not None else None
         if can_edit(post, project, user):
-            out.append(_post_out(post, project, await _author_name(post.autor_id, users), settings, request))
+            out.append(await _post_out(post, project, users, posts, settings, request))
     return out
 
 
@@ -756,16 +822,17 @@ async def create_post(
 ) -> PostOut:
     """Nueva publicación; un proyecto puede tener varias."""
     project = await get_project_or_404(body.project_id, projects, user) if body.project_id is not None else None
-    records = await store.list_by_project(project.id) if project and body.plantilla else []
-    bloques, figuras = _template(project, records) if body.plantilla else ([], [])
+    plantilla = body.plantilla and body.formato == "articulo"  # un PDF no tiene secciones ni figuras
+    records = await store.list_by_project(project.id) if project and plantilla else []
+    bloques, figuras = _template(project, records) if plantilla else ([], [])
     autor = await _author_name(user.id, users)
     post = await posts.create(
         titulo=body.titulo.strip(), resumen="", project_id=project.id if project else None,
-        autor_id=user.id, bloques=bloques, figuras=figuras,
+        autor_id=user.id, bloques=bloques, figuras=figuras, formato=body.formato,
     )
     if autor:
         post = await posts.update(post.id, autores=autor)
-    return _post_out(post, project, autor, settings, request)
+    return await _post_out(post, project, users, posts, settings, request)
 
 
 @router.get("/app/posts/{post_id}", response_model=PostOut)
@@ -774,7 +841,7 @@ async def get_post(
     users: Users, settings: SettingsDep,
 ) -> PostOut:
     post, project = await _editable_post(post_id, user, posts, projects)
-    return _post_out(post, project, await _author_name(post.autor_id, users), settings, request)
+    return await _post_out(post, project, users, posts, settings, request)
 
 
 @router.patch("/app/posts/{post_id}", response_model=PostOut)
@@ -784,6 +851,10 @@ async def update_post(
 ) -> PostOut:
     """Guarda el borrador. Las figuras se validan aquí (cálculo visible y vista), sin ir al cluster."""
     post, project = await _editable_post(post_id, user, posts, projects)
+    if post.formato == "pdf" and (body.bloques or body.figuras):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Una publicación en PDF no tiene secciones ni figuras"
+        )
     fields = body.model_dump(exclude_unset=True, exclude={"bloques", "figuras"})
     for key in ("titulo", "autores"):
         if key in fields:
@@ -801,7 +872,7 @@ async def update_post(
         post = await posts.update(post_id, **fields)
     except SlugTakenError as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e))
-    return _post_out(post, project, await _author_name(post.autor_id, users), settings, request)
+    return await _post_out(post, project, users, posts, settings, request)
 
 
 @router.get("/app/posts/{post_id}/preview", response_model=PublicPost)
@@ -811,7 +882,7 @@ async def preview_post(
 ) -> PublicPost:
     """El borrador guardado tal como lo verá el público, con avisos sobre las figuras."""
     post, project = await _editable_post(post_id, user, posts, projects)
-    renderer = _Renderer(post, project, user, store, projects, settings, pool)
+    renderer = _Renderer(post, project, user, store, projects, settings, pool, posts)
     view = await renderer.render()
     return _public(post, view, None, renderer.errores + renderer.avisos)
 
@@ -826,7 +897,7 @@ async def preview_figure(
     Si su cálculo aún no está disponible, devuelve la figura «en preparación» con el motivo.
     """
     post, project = await _editable_post(post_id, user, posts, projects)
-    renderer = _Renderer(post, project, user, store, projects, settings, pool)
+    renderer = _Renderer(post, project, user, store, projects, settings, pool, posts)
     try:
         view, record = await renderer.figure(body)
     except FigureUnavailable as e:
@@ -842,12 +913,12 @@ async def publish_post(
 ) -> PostOut:
     """Publica (o vuelve a publicar) el borrador: guarda la instantánea pública (RF-57)."""
     post, project = await _editable_post(post_id, user, posts, projects)
-    renderer = _Renderer(post, project, user, store, projects, settings, pool)
+    renderer = _Renderer(post, project, user, store, projects, settings, pool, posts)
     view = await renderer.render()
     if renderer.errores:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, " ".join(renderer.errores))
     post = await posts.publish(post_id, view)
-    return _post_out(post, project, await _author_name(post.autor_id, users), settings, request)
+    return await _post_out(post, project, users, posts, settings, request)
 
 
 @router.post("/app/posts/{post_id}/unpublish", response_model=PostOut)
@@ -858,7 +929,7 @@ async def unpublish_post(
     """Retira la publicación del blog; el borrador se conserva."""
     _, project = await _editable_post(post_id, user, posts, projects)
     post = await posts.unpublish(post_id)
-    return _post_out(post, project, await _author_name(post.autor_id, users), settings, request)
+    return await _post_out(post, project, users, posts, settings, request)
 
 
 @router.delete("/app/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -883,7 +954,10 @@ async def list_blog(posts: Posts) -> list[PublicPostSummary]:
     """Publicaciones publicadas, de la más reciente a la más antigua. Sin sesión."""
     keys = ("titulo", "resumen", "autores", "palabras_clave", "proyecto", "graficos")
     return [
-        PublicPostSummary(**{k: post.publicado.get(k) for k in keys}, slug=post.slug, publicado_at=post.publicado_at)
+        PublicPostSummary(
+            **{k: post.publicado.get(k) for k in keys}, formato=post.publicado.get("formato", "articulo"),
+            slug=post.slug, publicado_at=post.publicado_at,
+        )
         for post in await posts.list_published()
     ]
 
@@ -980,3 +1054,79 @@ async def download_figure_data(
     return Response(
         content, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+
+# --- PDF ---------------------------------------------------------------------------------------
+
+PDF_MAGIC = b"%PDF-"
+_PDF_NAME = re.compile(r"[^\w.\- ()]+")
+
+
+def _pdf_name(filename: str | None) -> str:
+    """Nombre del archivo sin ruta ni caracteres raros, terminado en `.pdf`."""
+    name = Path((filename or "").replace("\\", "/")).name
+    name = _PDF_NAME.sub("_", name).strip(" ._")[:120] or "publicacion"
+    return name if name.lower().endswith(".pdf") else f"{name}.pdf"
+
+
+def _pdf_response(pdf: PdfFile, cache: str, descargar: bool) -> Response:
+    """El PDF para mostrarlo en el navegador (inline) o, con `descargar`, como archivo."""
+    disposition = "attachment" if descargar else "inline"
+    return Response(
+        pdf.contenido,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(pdf.nombre)}",
+            "Cache-Control": cache,
+            "ETag": f'"{pdf.sha256}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.put("/app/posts/{post_id}/pdf", response_model=PostOut)
+async def upload_post_pdf(
+    post_id: int, request: Request, user: CurrentUser, posts: Posts, projects: Projects,
+    users: Users, settings: SettingsDep, archivo: Annotated[UploadFile, File(description="Documento PDF")],
+) -> PostOut:
+    """Sube (o reemplaza) el PDF de una publicación con formato `pdf`.
+
+    Queda en el borrador: el público sigue viendo el anterior hasta volver a publicar.
+    """
+    post, project = await _editable_post(post_id, user, posts, projects)
+    if post.formato != "pdf":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Esta publicación no es un PDF")
+    limit = int(settings.post_pdf_max_mb * 1024 * 1024)
+    content = await archivo.read(limit + 1)
+    if len(content) > limit:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE, f"El PDF supera el máximo de {settings.post_pdf_max_mb:g} MB"
+        )
+    if not content.startswith(PDF_MAGIC):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "El archivo no es un PDF")
+    post = await posts.set_pdf(post_id, _pdf_name(archivo.filename), content)
+    return await _post_out(post, project, users, posts, settings, request)
+
+
+@router.get("/app/posts/{post_id}/pdf")
+async def get_post_pdf(
+    post_id: int, user: CurrentUser, posts: Posts, projects: Projects, descargar: bool = False
+) -> Response:
+    """PDF del borrador, para la vista previa del editor."""
+    post, _ = await _editable_post(post_id, user, posts, projects)
+    try:
+        pdf = await posts.get_pdf(post.pdf_id, post.id)
+    except PdfNotFoundError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
+    return _pdf_response(pdf, "private, no-cache", descargar)
+
+
+@router.get("/app/blog/{slug}/pdf")
+async def get_blog_pdf(slug: str, posts: Posts, descargar: bool = False) -> Response:
+    """PDF de la versión publicada. Sin sesión."""
+    post = await _published(slug, posts)
+    try:
+        pdf = await posts.get_pdf(post.pdf_publicado_id, post.id)
+    except PdfNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Esta publicación no tiene PDF")
+    return _pdf_response(pdf, "public, max-age=300", descargar)

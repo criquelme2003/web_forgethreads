@@ -31,7 +31,7 @@ export function PostTable({ posts, showProject }) {
               {showProject && <td className="small">{p.proyecto ? <Link to={`/projects/${p.proyecto.id}`}>{p.proyecto.nombre}</Link> : <span className="muted">—</span>}</td>}
               <td><PostState post={p} /></td>
               <td className="small muted">{fmtDate(p.updated_at)}</td>
-              <td className="small">{p.estado === 'publicado' && <a href={`/front/blog/${p.slug}`} target="_blank" rel="noreferrer">ver en el blog ↗</a>}</td>
+              <td className="small">{p.formato === 'pdf' && <span className="pill" style={{ marginRight: 6 }}>PDF</span>}{p.estado === 'publicado' && <a href={`/front/blog/${p.slug}`} target="_blank" rel="noreferrer">ver en el blog ↗</a>}</td>
             </tr>
           ))}
         </tbody>
@@ -53,6 +53,7 @@ export default function Posts() {
   const [projects, setProjects] = useState([]);
   const [titulo, setTitulo] = useState('');
   const [projectId, setProjectId] = useState('');
+  const [formato, setFormato] = useState('articulo');
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
@@ -62,7 +63,7 @@ export default function Posts() {
 
   async function onSubmit(e) {
     e.preventDefault();
-    setMsg(await createPost(navigate, { titulo, project_id: projectId ? Number(projectId) : null }));
+    setMsg(await createPost(navigate, { titulo, project_id: projectId ? Number(projectId) : null, formato }));
   }
 
   return (
@@ -73,7 +74,8 @@ export default function Posts() {
           <a href="/front/blog" target="_blank" rel="noreferrer" className="small">Ver el blog público ↗</a>
         </div>
         <p className="sub">
-          Artículos sobre los proyectos y sus hallazgos, con secciones de texto y figuras de los cálculos en una barra lateral.
+          Artículos sobre los proyectos y sus hallazgos, con secciones de texto (Markdown y LaTeX) y figuras de los cálculos en una barra lateral,
+          o documentos PDF con su resumen.
           Un proyecto puede tener varias publicaciones. Una figura se publica solo si el texto la cita y le das permiso; nadie ve
           la publicación hasta que la publicas, y los cambios posteriores no se muestran hasta publicar de nuevo.
         </p>
@@ -83,9 +85,14 @@ export default function Posts() {
             <option value="">Sin proyecto</option>
             {projects.map((p) => <option key={p.id} value={p.id}>{p.nombre} ({TIPO_LABELS[p.tipo]})</option>)}
           </select>
+          <select value={formato} onChange={(e) => setFormato(e.target.value)} aria-label="Formato">
+            <option value="articulo">Artículo (secciones y figuras)</option>
+            <option value="pdf">PDF (subir un documento)</option>
+          </select>
           <button type="submit" className="primary">Nueva publicación</button>
         </form>
-        {projectId && <p className="small muted" style={{ marginBottom: 0 }}>Se precarga con las secciones de un artículo (Introducción con la descripción del proyecto, Metodología, Resultados…) y su cálculo terminado más reciente como figura.</p>}
+        {formato === 'pdf' && <p className="small muted" style={{ marginBottom: 0 }}>Sube un PDF ya terminado (un artículo o una tesis) e indica su título, autores, resumen y palabras clave; el blog lo muestra tal cual.</p>}
+        {projectId && formato === 'articulo' && <p className="small muted" style={{ marginBottom: 0 }}>Se precarga con las secciones de un artículo (Introducción con la descripción del proyecto, Metodología, Resultados…) y su cálculo terminado más reciente como figura.</p>}
         {msg && <p className="status err small">{msg}</p>}
       </div>
       <div className="card">

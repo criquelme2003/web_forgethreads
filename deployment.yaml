@@ -117,6 +117,8 @@ metadata:
     external-dns.alpha.kubernetes.io/target: proxy.inf.uct.cl
     external-dns.alpha.kubernetes.io/ttl: "1"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # El PDF de una publicación (POST_PDF_MAX_MB, 30 por defecto) supera el 1 MB que nginx acepta por defecto.
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
 spec:
   ingressClassName: nginx          
   tls:
