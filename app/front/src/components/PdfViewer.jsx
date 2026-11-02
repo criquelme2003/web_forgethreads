@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
  * igual en todos los navegadores (también en móviles, que no muestran PDF incrustados).
  * pdf.js se carga recién al abrir un PDF, para no pesar en el resto del SPA, y cada página se
  * dibuja cuando se acerca a la pantalla. Se usa la versión «legacy», que funciona en navegadores
- * más antiguos.
+ * más antiguos. El visor tiene alto fijo y su propio scroll; abajo indica la página visible.
  */
 
 let pdfjsPromise = null;
@@ -26,7 +26,7 @@ function loadPdfjs() {
   return pdfjsPromise;
 }
 
-function PdfPage({ doc, number, width, ratio, onRatio }) {
+function PdfPage({ doc, number, width, ratio, onRatio, root }) {
   const holder = useRef(null);
   const canvas = useRef(null);
   const [visible, setVisible] = useState(false);
@@ -38,10 +38,11 @@ function PdfPage({ doc, number, width, ratio, onRatio }) {
       setVisible(true);
       return undefined;
     }
-    const io = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { rootMargin: '600px 0px' });
+    // La raíz es la caja con scroll del visor: así el margen adelanta las páginas siguientes.
+    const io = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { root, rootMargin: '600px 0px' });
     io.observe(el);
     return () => io.disconnect();
-  }, []);
+  }, [root]);
 
   useEffect(() => {
     if (!visible || !width) return undefined;
@@ -67,7 +68,7 @@ function PdfPage({ doc, number, width, ratio, onRatio }) {
   }, [doc, number, width, visible, onRatio]);
 
   return (
-    <div ref={holder} className="pdf-page" style={{ height: width ? Math.round(width * ratio) : undefined }} aria-label={`Página ${number}`}>
+    <div ref={holder} className="pdf-page" data-page={number} style={{ height: width ? Math.round(width * ratio) : undefined }} aria-label={`Página ${number}`}>
       <canvas ref={canvas} />
     </div>
   );
@@ -80,6 +81,7 @@ export default function PdfViewer({ url, title }) {
   const [width, setWidth] = useState(0);
   const [ratios, setRatios] = useState({}); // página → alto/ancho, cuando ya se leyó
   const [firstRatio, setFirstRatio] = useState(1.414); // A4 hasta leer la primera página
+  const [current, setCurrent] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,6 +89,8 @@ export default function PdfViewer({ url, title }) {
     setDoc(null);
     setError('');
     setRatios({});
+    setCurrent(1);
+    if (box.current) box.current.scrollTop = 0;
     loadPdfjs()
       .then((pdfjs) => {
         const task = pdfjs.getDocument({ url, withCredentials: true, isEvalSupported: false });
@@ -117,7 +121,11 @@ export default function PdfViewer({ url, title }) {
     const el = box.current;
     if (!el) return undefined;
     let t = null;
-    const measure = () => setWidth(Math.floor(el.clientWidth));
+    // Ancho útil: sin el relleno de la caja (ni la barra de scroll, que clientWidth ya excluye).
+    const measure = () => {
+      const style = window.getComputedStyle(el);
+      setWidth(Math.max(0, Math.floor(el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight))));
+    };
     measure();
     if (typeof ResizeObserver === 'undefined') return undefined;
     const ro = new ResizeObserver(() => {
@@ -135,14 +143,37 @@ export default function PdfViewer({ url, title }) {
     setRatios((r) => (Math.abs((r[number] || 0) - ratio) < 1e-3 ? r : { ...r, [number]: ratio }));
   }).current;
 
+  // Página visible: la última cuyo borde superior ya pasó la mitad de la ventana del visor.
+  function onScroll() {
+    const el = box.current;
+    if (!el) return;
+    const middle = el.scrollTop + el.clientHeight / 2;
+    let n = 1;
+    for (const page of el.querySelectorAll('.pdf-page')) {
+      if (page.offsetTop <= middle) n = Number(page.dataset.page);
+      else break;
+    }
+    setCurrent(n);
+  }
+
   return (
-    <div className="pdf-viewer" ref={box} role="document" aria-label={title || 'Documento PDF'}>
-      {error && <p className="status err small">{error}</p>}
-      {!doc && !error && <div className="empty">Cargando el PDF…</div>}
-      {doc && Array.from({ length: doc.numPages }, (_, i) => (
-        <PdfPage key={i + 1} doc={doc} number={i + 1} width={width} ratio={ratios[i + 1] || firstRatio} onRatio={onRatio} />
-      ))}
-      {doc && <div className="small muted pdf-pages">{doc.numPages} {doc.numPages === 1 ? 'página' : 'páginas'}</div>}
+    <div className="pdf-viewer">
+      <div className="pdf-scroll" ref={box} onScroll={onScroll} tabIndex={0} role="document" aria-label={title || 'Documento PDF'}>
+        {error && <p className="status err small">{error}</p>}
+        {!doc && !error && <div className="empty">Cargando el PDF…</div>}
+        {doc && Array.from({ length: doc.numPages }, (_, i) => (
+          <PdfPage
+            key={i + 1}
+            doc={doc}
+            number={i + 1}
+            width={width}
+            ratio={ratios[i + 1] || firstRatio}
+            onRatio={onRatio}
+            root={box.current}
+          />
+        ))}
+      </div>
+      {doc && <div className="small muted pdf-pages" aria-live="polite">Página {current} de {doc.numPages}</div>}
     </div>
   );
 }

@@ -259,7 +259,11 @@ a.stat-link:hover{border-color:#9ca3af}
 /* Publicación en PDF */
 .post-pdf-links{display:inline-flex;flex-wrap:wrap;gap:8px;margin-left:12px;vertical-align:middle}
 .post-pdf-links .btn{font-size:12px;padding:5px 9px}
-.pdf-viewer{display:grid;gap:12px;min-width:0;background:#e5e7eb;border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+/* Ventana fija con scroll propio: la página no se alarga con el documento. */
+.pdf-viewer{display:grid;gap:6px;min-width:0}
+.pdf-scroll{display:grid;gap:12px;align-content:start;height:min(80vh,1000px);min-height:360px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;background:#e5e7eb;border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.pdf-scroll:focus-visible{outline:2px solid #3b82f6;outline-offset:2px}
+@media(max-width:640px){.pdf-scroll{height:70vh;padding:8px;gap:8px}}
 .pdf-page{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.15);min-height:120px;overflow:hidden}
 .pdf-page canvas{display:block;width:100%;height:auto}
 .pdf-pages{text-align:center}
